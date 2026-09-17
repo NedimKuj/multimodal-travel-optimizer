@@ -38,7 +38,7 @@ export function segment(fixture: SegmentFixture): TransportSegment {
     destination: fixture.destination,
     departureAt,
     arrivalAt,
-    durationMinutes: minutesBetween(departureAt, arrivalAt),
+    durationMinutes: Math.round(minutesBetween(departureAt, arrivalAt)),
     transfers: fixture.transfers ?? 0,
     provider: FIXTURE_PROVIDER,
   });
