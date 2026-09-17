@@ -82,9 +82,13 @@ interface Location {
   countryCode: string
   latitude: number
   longitude: number
+  timeZone: string // IANA, e.g. "Europe/Sarajevo"
   iata?: string
 }
 ```
+
+`timeZone` is required so that local dates can be derived correctly
+(see `docs/decisions/0003-zoned-timestamps.md`).
 
 The domain must not depend directly on provider-specific location types.
 
@@ -116,8 +120,8 @@ interface TransportSegment {
   origin: Location
   destination: Location
 
-  departureAt: string
-  arrivalAt: string
+  departureAt: ZonedTimestamp
+  arrivalAt: ZonedTimestamp
 
   durationMinutes: number
   transfers: number
@@ -144,8 +148,8 @@ interface TransportOffer {
   bookingUrl?: string
 
   sourceType: "cached" | "recent" | "live" | "estimated"
-  fetchedAt: string
-  expiresAt?: string
+  fetchedAt: string  // ISO-8601 UTC instant
+  expiresAt?: string // ISO-8601 UTC instant
 }
 ```
 
@@ -210,6 +214,19 @@ Never compare naive local date/time strings.
 Connection validation must operate on actual instants.
 
 Local departure and arrival dates are used for itinerary presentation and stay allocation.
+
+Representation (see `docs/decisions/0003-zoned-timestamps.md`):
+
+```ts
+interface ZonedTimestamp {
+  instant: string  // ISO-8601 UTC
+  timeZone: string // IANA zone
+}
+```
+
+A UTC offset alone is not a time zone. Transport `departureAt`/`arrivalAt` are
+`ZonedTimestamp`s. Timestamps without an explicit offset must be rejected at the
+provider boundary. Calendar dates without time use `YYYY-MM-DD` local dates.
 
 Example:
 
