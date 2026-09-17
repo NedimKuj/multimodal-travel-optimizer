@@ -7,3 +7,4 @@ export * from "./location.js";
 export * from "./provenance.js";
 export * from "./money/exchange.js";
 export * from "./transport.js";
+export * from "./accommodation.js";
