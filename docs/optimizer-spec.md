@@ -142,16 +142,21 @@ interface TransportOffer {
   price: Money
   priceBasis: { kind: "perTraveler" } | { kind: "total"; travelers: number }
 
-  provider: string
-  providerReference?: string
+  provenance: PriceProvenance
 
   bookingUrl?: string
+}
 
+interface PriceProvenance {
+  provider: string
+  providerReference?: string
   sourceType: "cached" | "recent" | "live" | "estimated"
   fetchedAt: string  // ISO-8601 UTC instant
   expiresAt?: string // ISO-8601 UTC instant
 }
 ```
+
+A total price quoted for one party size must not be rescaled to another.
 
 Rules:
 
