@@ -324,7 +324,10 @@ Jan 2: PRG → SJJ
 
 The optimizer must ensure:
 
-- every night is covered appropriately
+- every night on the ground is either covered by a stay or reported as an
+  uncovered night (see
+  `docs/decisions/0005-trip-metrics-and-accommodation-coverage.md`); a trip with
+  uncovered nights must not be presented as a complete-trip cost
 - accommodation dates align with the transport itinerary
 - no accommodation is booked after the traveler has departed
 - no destination stay overlaps another stay incorrectly
@@ -510,9 +513,10 @@ Dominance pruning should eliminate candidates that are strictly worse than anoth
 
 Candidate A dominates candidate B when:
 
-- A costs no more than B
+- A costs no more than B, within the same cost scope
 - A takes no longer than B
-- A has no more transfers than B
+- A has no more changes than B (`stops + connections`, see
+  `docs/decisions/0005-trip-metrics-and-accommodation-coverage.md`)
 - and A is strictly better in at least one dimension
 
 Dominated candidate B may be discarded.
@@ -710,9 +714,11 @@ Vienna + Prague
 
 Transport: €312
 Accommodation: €184
-Total: €496
+Total: €496 (cost scope: complete)
 Duration: 7 nights
-Transfers: 2
+Legs: 3
+Stops: 0
+Connections: 0
 Outbound: SJJ → VIE
 Internal: VIE → PRG
 Return: PRG → SJJ

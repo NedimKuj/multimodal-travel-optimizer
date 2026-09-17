@@ -231,14 +231,14 @@ describe("trip cost", () => {
 
 // ── Time, transfers, provenance ──────────────────────────────────────────────
 
-describe("time and transfers", () => {
+describe("time, legs, stops and connections", () => {
   it("separates moving time from total duration", () => {
     const result = summary(multiCity);
     expect(result.travelTimeMinutes).toBe(75 + 240 + 100);
     expect(result.totalDurationMinutes).toBe(7 * 24 * 60 + 9 * 60 + 40);
   });
 
-  it("counts changes without a stay in between, plus in-segment transfers", () => {
+  it("counts changes without a stay in between, and stops inside segments", () => {
     const sameDayTrain = segment({
       id: "seg-same-day-train",
       mode: "train",
@@ -266,11 +266,89 @@ describe("time and transfers", () => {
       ],
       stays: [stay({ id: "p", city: PRAGUE, checkIn: "2026-12-26", checkOut: "2027-01-02", amountMinor: 50000 })],
     });
-    expect(summary(candidate).transfers).toBe(2);
+    expect(summary(candidate)).toMatchObject({ legs: 3, stops: 1, connections: 1 });
   });
 
-  it("reports no transfers when every change has a stay", () => {
-    expect(summary(multiCity).transfers).toBe(0);
+  it("counts no connection where a stay separates two legs", () => {
+    expect(summary(multiCity)).toMatchObject({ legs: 3, stops: 0, connections: 0 });
+    expect(summary(roundTrip)).toMatchObject({ legs: 2, stops: 0, connections: 0 });
+  });
+});
+
+describe("accommodation coverage", () => {
+  it("marks a fully covered trip complete", () => {
+    expect(summary(multiCity).uncoveredNights).toEqual([]);
+    expect(summary(multiCity).cost.scope).toBe("complete");
+    expect(summary(roundTrip).cost.scope).toBe("complete");
+  });
+
+  it("lists nights on the ground with no stay and qualifies the total", () => {
+    const oneNightOnly = stay({
+      id: "stay-one-night",
+      city: VIENNA,
+      checkIn: "2026-12-26",
+      checkOut: "2026-12-27",
+      amountMinor: 9000,
+    });
+    const result = summary({ ...roundTrip, stays: [oneNightOnly] });
+    expect(result.nights).toBe(1);
+    expect(result.uncoveredNights).toEqual([
+      "2026-12-27",
+      "2026-12-28",
+      "2026-12-29",
+      "2026-12-30",
+      "2026-12-31",
+      "2027-01-01",
+    ]);
+    expect(result.cost.scope).toBe("transport_and_partial_accommodation");
+  });
+
+  it("treats a transport-only trip as unpriced accommodation, not a complete trip", () => {
+    const result = summary({ ...roundTrip, stays: [] });
+    expect(result.uncoveredNights).toHaveLength(7);
+    expect(result.cost.scope).toBe("transport_and_partial_accommodation");
+  });
+
+  it("does not count a night spent travelling as uncovered", () => {
+    // Arrives 30 Dec and leaves the same day: no night on the ground.
+    const overnightTrain = segment({
+      id: "seg-night-train",
+      mode: "train",
+      origin: WIEN_HBF,
+      destination: PRAHA_HLAVNI,
+      departure: "2026-12-29T23:10+01:00",
+      arrival: "2026-12-30T06:20+01:00",
+    });
+    const sameDayOnward = segment({
+      id: "seg-prg-sjj-same-day",
+      mode: "flight",
+      origin: PRG,
+      destination: SJJ,
+      departure: "2026-12-30T12:00+01:00",
+      arrival: "2026-12-30T13:40+01:00",
+    });
+    const candidate = trip({
+      id: "overnight",
+      segments: [sjjToVie, overnightTrain, sameDayOnward],
+      offers: [
+        offer({ id: "o1", segmentIds: [sjjToVie.id], amountMinor: 7500 }),
+        offer({ id: "o2", segmentIds: [overnightTrain.id], amountMinor: 4500 }),
+        offer({ id: "o3", segmentIds: [sameDayOnward.id], amountMinor: 9000 }),
+      ],
+      stays: [
+        stay({
+          id: "vienna-3",
+          city: VIENNA,
+          checkIn: "2026-12-26",
+          checkOut: "2026-12-29",
+          amountMinor: 27000,
+        }),
+      ],
+    });
+    const result = summary(candidate);
+    expect(result.uncoveredNights).toEqual([]);
+    expect(result.cost.scope).toBe("complete");
+    expect(result.connections).toBe(1);
   });
 });
 

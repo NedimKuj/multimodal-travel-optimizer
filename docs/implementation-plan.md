@@ -1572,7 +1572,7 @@ Prague → Sarajevo
 ────────────────────────────────────────────
 
 Travel time: 7h 40m
-Transfers: 2
+3 legs · 0 stops · 0 connections
 
 [ View trip ]
 

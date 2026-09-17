@@ -6,7 +6,7 @@ import { locationSchema, type Location } from "./location.js";
 import type { CurrencyCode } from "./money/currency.js";
 import { addMoney, allocateEvenly, sumMoney, type Money } from "./money/money.js";
 import { weakestSourceType, type SourceType } from "./provenance.js";
-import { compareLocalDates, type LocalDate } from "./time/local-date.js";
+import { addDays, compareLocalDates, type LocalDate } from "./time/local-date.js";
 import { compareZonedTimestamps, localDate, minutesBetween } from "./time/zoned-timestamp.js";
 import {
   offerPriceForTravelers,
@@ -67,6 +67,14 @@ function findDuplicates(ids: readonly string[]): string[] {
  * Not covered yet, because they need geography or configuration that does not
  * exist yet: minimum connection times, airport/station ↔ city relationships
  * (whether a stay's city matches where the traveler is), and ground transfers.
+ *
+ * Nights on the ground without a stay are not an error: they are reported by
+ * `summarizeTrip` as `uncoveredNights`, and the cost scope says so
+ * (docs/decisions/0005-trip-metrics-and-accommodation-coverage.md).
+ *
+ * Known limitation: time on the ground is bounded by the next departure, so a
+ * trip whose last segment does not return to the origin cannot yet carry a
+ * stay after its final arrival.
  */
 export function validateTripCandidate(trip: TripCandidate): DomainIssue[] {
   const issues: DomainIssue[] = [];
@@ -177,6 +185,28 @@ function groundGaps(segments: readonly TransportSegment[]): GroundGap[] {
   return gaps;
 }
 
+/**
+ * Local dates of the nights spent on the ground in `gap`. A night is named by
+ * the date it starts on, so an arrival on the 26th and a departure on the 29th
+ * means the nights of the 26th, 27th and 28th.
+ */
+function nightsInGap(gap: GroundGap): LocalDate[] {
+  const nights: LocalDate[] = [];
+  let night = gap.arrivalDate;
+  while (compareLocalDates(night, gap.departureDate) < 0) {
+    nights.push(night);
+    night = addDays(night, 1);
+  }
+  return nights;
+}
+
+function nightIsCovered(night: LocalDate, stays: readonly Stay[]): boolean {
+  return stays.some(
+    (stay) =>
+      compareLocalDates(stay.checkIn, night) <= 0 && compareLocalDates(night, stay.checkOut) < 0,
+  );
+}
+
 function stayFitsGap(stay: Stay, gap: GroundGap): boolean {
   return (
     compareLocalDates(gap.arrivalDate, stay.checkIn) <= 0 &&
@@ -224,12 +254,24 @@ function validateStays(trip: TripCandidate): DomainIssue[] {
   return issues;
 }
 
+/**
+ * `complete`: transport and every night on the ground are priced.
+ * `transport_and_partial_accommodation`: some nights have no stay, so this
+ * total is not a complete-trip cost.
+ */
+export type TripCostScope = "complete" | "transport_and_partial_accommodation";
+
 export interface TripCost {
   /** Sum of selected transport offers for the whole party. */
   readonly transport: Money;
   /** Sum of stays for the whole party. */
   readonly accommodation: Money;
   readonly total: Money;
+  /**
+   * What `total` covers. Totals of different scopes must not be compared
+   * (docs/optimizer-spec.md §19).
+   */
+  readonly scope: TripCostScope;
   /**
    * The total split across travelers; shares differ by at most one minor unit
    * and always sum to `total`.
@@ -242,17 +284,24 @@ export interface TripSummary {
   readonly returnDate: LocalDate;
   /** Stay cities in visiting order (consecutive repeats collapsed). */
   readonly destinations: readonly Location[];
+  /** Nights covered by a stay. */
   readonly nights: number;
+  /**
+   * Local dates of nights spent on the ground with no stay booked. A night on
+   * an overnight train or flight is not a night on the ground.
+   */
+  readonly uncoveredNights: readonly LocalDate[];
   readonly cost: TripCost;
   /** Time spent moving: the sum of segment durations. */
   readonly travelTimeMinutes: number;
   /** First departure to last arrival. */
   readonly totalDurationMinutes: number;
-  /**
-   * In-segment transfers plus changes between consecutive segments that have
-   * no stay between them.
-   */
-  readonly transfers: number;
+  /** Number of transport segments. */
+  readonly legs: number;
+  /** Intermediate stops inside segments. */
+  readonly stops: number;
+  /** Changes between consecutive segments with no stay in between. */
+  readonly connections: number;
   /** The weakest source type of any price in the trip. */
   readonly sourceType: SourceType;
   /** Providers of all prices, sorted. */
@@ -303,9 +352,12 @@ export function summarizeTrip(trip: TripCandidate): SummarizeTripResult {
   }
 
   const gaps = groundGaps(trip.segments);
-  const changesWithoutStay = gaps.filter(
+  const connections = gaps.filter(
     (gap) => !trip.stays.some((stay) => stayFitsGap(stay, gap)),
   ).length;
+  const uncoveredNights = gaps
+    .flatMap(nightsInGap)
+    .filter((night) => !nightIsCovered(night, trip.stays));
 
   const sourceType = weakestSourceType([
     ...trip.offers.map((offer) => offer.provenance.sourceType),
@@ -325,10 +377,13 @@ export function summarizeTrip(trip: TripCandidate): SummarizeTripResult {
       returnDate: localDate(last.arrivalAt),
       destinations,
       nights: trip.stays.reduce((nights, stay) => nights + stay.nights, 0),
+      uncoveredNights,
       cost: {
         transport,
         accommodation,
         total,
+        scope:
+          uncoveredNights.length === 0 ? "complete" : "transport_and_partial_accommodation",
         perPersonShares: allocateEvenly(total, trip.travelers),
       },
       travelTimeMinutes: trip.segments.reduce(
@@ -336,8 +391,9 @@ export function summarizeTrip(trip: TripCandidate): SummarizeTripResult {
         0,
       ),
       totalDurationMinutes: minutesBetween(first.departureAt, last.arrivalAt),
-      transfers:
-        trip.segments.reduce((count, segment) => count + segment.transfers, 0) + changesWithoutStay,
+      legs: trip.segments.length,
+      stops: trip.segments.reduce((count, segment) => count + segment.transfers, 0),
+      connections,
       sourceType,
       sources: [
         ...new Set([
