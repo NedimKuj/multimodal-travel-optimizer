@@ -25,6 +25,14 @@ export default tseslint.config(
         "error",
         { assertionStyle: "never" },
       ],
+      "@typescript-eslint/no-unused-vars": [
+        "error",
+        {
+          argsIgnorePattern: "^_",
+          varsIgnorePattern: "^_",
+          destructuredArrayIgnorePattern: "^_",
+        },
+      ],
       "@typescript-eslint/restrict-template-expressions": [
         "error",
         { allowNumber: true },
