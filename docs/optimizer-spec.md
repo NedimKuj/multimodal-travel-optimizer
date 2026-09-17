@@ -100,6 +100,12 @@ train
 bus
 ```
 
+Transport is modeled as two separate concepts (see
+`docs/decisions/0002-separate-transport-offers-from-segments.md`):
+
+- a **segment** is a physical movement and carries no price
+- an **offer** is a commercial fare covering one or more segments
+
 A normalized transport segment contains at minimum:
 
 ```ts
@@ -116,7 +122,21 @@ interface TransportSegment {
   durationMinutes: number
   transfers: number
 
+  provider: string
+  providerReference?: string
+}
+```
+
+A normalized transport offer contains at minimum:
+
+```ts
+interface TransportOffer {
+  id: string
+
+  segmentIds: string[] // one or more, chronological
+
   price: Money
+  priceBasis: { kind: "perTraveler" } | { kind: "total"; travelers: number }
 
   provider: string
   providerReference?: string
@@ -128,6 +148,14 @@ interface TransportSegment {
   expiresAt?: string
 }
 ```
+
+Rules:
+
+- a segment may exist without an offer (for example timetable-only rail data)
+- a single fare covering multiple segments is one offer with one price
+- never split a multi-segment fare into artificial per-segment prices
+- trip cost is computed from selected offers, never from segments
+- every segment of a fully priced trip is covered by exactly one selected offer
 
 Provider-specific response models must be normalized before entering the optimizer.
 
@@ -516,6 +544,11 @@ Do not compare a €300 flight-only itinerary against a €500 complete itinerar
 
 The comparison must use equivalent cost scope.
 
+Transport cost is the sum of the selected transport offers. A fare covering
+several segments contributes once. A trip containing a segment not covered by
+any selected offer has no complete transport cost and must not be presented as
+fully priced.
+
 ---
 
 ## 20. Accommodation
@@ -544,6 +577,9 @@ Accommodation cost must be included in final trip cost.
 ## 21. Price Provenance
 
 Every externally sourced price must retain provenance.
+
+Provenance belongs to the priced object: a `TransportOffer`, a `Stay`, or an
+exchange rate. Transport segments carry their data source but no price.
 
 At minimum:
 

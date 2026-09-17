@@ -448,12 +448,18 @@ type Location = {
 
 ---
 
-## Transport segment
+## Transport segment and transport offer
+
+> Amended by `docs/decisions/0002-separate-transport-offers-from-segments.md`.
+> A segment is a physical movement without a price. An offer is a commercial
+> fare covering one or more segments. `docs/optimizer-spec.md` §4 is authoritative.
 
 ```ts
 type TransportSegment = {
+  id: string
   mode: "flight" | "train" | "bus"
   provider: string
+  providerReference?: string
 
   origin: Location
   destination: Location
@@ -463,12 +469,22 @@ type TransportSegment = {
 
   durationMinutes: number
   transfers: number
+}
+```
+
+```ts
+type TransportOffer = {
+  id: string
+  segmentIds: string[]
 
   price: Money
+  priceBasis: { kind: "perTraveler" } | { kind: "total"; travelers: number }
 
   bookingUrl?: string
 
-  source: string
+  provider: string
+  providerReference?: string
+  sourceType: "cached" | "recent" | "live" | "estimated"
   fetchedAt: string
   expiresAt?: string
 }
@@ -547,21 +563,33 @@ The UI should consume **TripCandidate**, not provider-specific data.
 
 Every external source must be behind an adapter.
 
+> Amended by `docs/decisions/0002-separate-transport-offers-from-segments.md`:
+> transport providers return segments and offers separately, and every provider
+> returns a result envelope that can express partial failure.
+
 ```ts
 interface FlightProvider {
-  search(request: FlightSearchRequest): Promise<FlightOffer[]>
+  search(request: FlightSearchRequest): Promise<ProviderResult<TransportSearchResult>>
 }
 ```
 
 ```ts
 interface RailProvider {
-  search(request: RailSearchRequest): Promise<TransportSegment[]>
+  // offers may be empty for timetable-only data
+  search(request: RailSearchRequest): Promise<ProviderResult<TransportSearchResult>>
 }
 ```
 
 ```ts
 interface BusProvider {
-  search(request: BusSearchRequest): Promise<TransportSegment[]>
+  search(request: BusSearchRequest): Promise<ProviderResult<TransportSearchResult>>
+}
+```
+
+```ts
+type TransportSearchResult = {
+  segments: TransportSegment[]
+  offers: TransportOffer[]
 }
 ```
 
@@ -795,13 +823,10 @@ Separate.
 
 Timetable availability does **not** imply current bookable price.
 
-The normalized model must therefore allow:
+The normalized model must therefore allow network-only edges without a price.
 
-```ts
-price: undefined
-```
-
-for network-only edges.
+Per `docs/decisions/0002-separate-transport-offers-from-segments.md`, these are
+`TransportSegment`s with no associated `TransportOffer`.
 
 Those edges can still be useful during route construction.
 
@@ -1017,15 +1042,17 @@ Each edge has:
   arrivalAt
 
   duration
-  price
 
   mode
   transfers
 
   source
-  confidence
 }
 ```
+
+Price and confidence are not edge properties. They belong to the
+`TransportOffer`s covering an edge, and an edge may have none
+(see `docs/decisions/0002-separate-transport-offers-from-segments.md`).
 
 This allows:
 
