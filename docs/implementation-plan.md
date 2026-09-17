@@ -523,36 +523,29 @@ Duffel's current Stays model is structured around accommodation → room → rat
 
 This is the most important object in the entire application.
 
+> Amended by `docs/decisions/0004-trip-candidate-and-budget-shape.md`.
+> The stored shape is the ordered sequence of segments, offers and stays.
+> Dates, destinations, costs, durations, transfers and confidence are derived.
+> Confidence uses `cached | recent | live | estimated`, not `cached | verified`.
+
 ```ts
 type TripCandidate = {
   id: string
 
   origin: Location
+  travelers: number
 
-  destinations: Location[]
-
-  departureDate: string
-  returnDate: string
-
-  legs: TransportSegment[]
+  segments: TransportSegment[]
+  offers: TransportOffer[]
 
   stays: Stay[]
-
-  transportCost: Money
-  accommodationCost: Money
-  totalCost: Money
-
-  totalDurationMinutes: number
-  travelTimeMinutes: number
-
-  transfers: number
-
-  score: number
-
-  confidence: "cached" | "verified"
-
-  sources: string[]
 }
+
+// Derived, never stored independently:
+//   departureDate, returnDate, destinations
+//   transportCost, accommodationCost, totalCost, perPersonCost
+//   totalDurationMinutes, travelTimeMinutes, transfers
+//   sourceType (weakest of all prices), sources
 ```
 
 The UI should consume **TripCandidate**, not provider-specific data.

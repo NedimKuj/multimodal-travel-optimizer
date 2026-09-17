@@ -264,8 +264,9 @@ interface SearchRequest {
 
   travelers: number
 
-  budget?: Money
-  budgetPerPerson?: Money
+  budget?:
+    | { kind: "total"; amount: Money }
+    | { kind: "perPerson"; amount: Money }
 
   transportModes: Array<"flight" | "train" | "bus">
 
@@ -277,6 +278,9 @@ interface SearchRequest {
 ```
 
 The exact public API may evolve, but the optimizer must preserve these concepts.
+
+The budget is a tagged union so that total and per-person budgets can never be
+confused or both be set (see `docs/decisions/0004-trip-candidate-and-budget-shape.md`).
 
 ---
 
