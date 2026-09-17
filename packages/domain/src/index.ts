@@ -9,3 +9,4 @@ export * from "./money/exchange.js";
 export * from "./transport.js";
 export * from "./accommodation.js";
 export * from "./search-request.js";
+export * from "./trip-candidate.js";
