@@ -284,7 +284,11 @@ export interface TripSummary {
   readonly returnDate: LocalDate;
   /** Stay cities in visiting order (consecutive repeats collapsed). */
   readonly destinations: readonly Location[];
-  /** Nights covered by a stay. */
+  /**
+   * Nights booked, summed across stays. With two stays in different cities on
+   * the same night this exceeds the number of nights on the ground, so it is
+   * not the complement of `uncoveredNights`.
+   */
   readonly nights: number;
   /**
    * Local dates of nights spent on the ground with no stay booked. A night on
