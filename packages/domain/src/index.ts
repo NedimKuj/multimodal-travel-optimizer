@@ -5,3 +5,4 @@ export * from "./time/local-date.js";
 export * from "./time/zoned-timestamp.js";
 export * from "./location.js";
 export * from "./provenance.js";
+export * from "./money/exchange.js";
