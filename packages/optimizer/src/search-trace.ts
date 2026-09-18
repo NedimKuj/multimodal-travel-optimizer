@@ -101,8 +101,12 @@ export function searchFingerprint(
   request: SearchRequest,
   currency: CurrencyCode,
   optimizerVersion: string = OPTIMIZER_VERSION,
+  /** Different strategies answer the same request differently. */
+  strategy: SearchStrategy = "provider_round_trips",
 ): string {
-  const canonical = JSON.stringify(canonicalize({ request, currency, optimizerVersion }));
+  const canonical = JSON.stringify(
+    canonicalize({ request, currency, optimizerVersion, strategy }),
+  );
   return createHash("sha256").update(canonical).digest("hex");
 }
 
@@ -172,7 +176,7 @@ export async function runFlightSearch(
 
   return {
     searchId: newSearchId(),
-    fingerprint: searchFingerprint(request, currency, optimizerVersion),
+    fingerprint: searchFingerprint(request, currency, optimizerVersion, strategy),
     optimizerVersion,
     status: exploration.status,
     strategy,

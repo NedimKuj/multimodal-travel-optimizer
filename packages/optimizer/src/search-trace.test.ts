@@ -56,6 +56,12 @@ describe("searchFingerprint", () => {
     );
   });
 
+  it("changes with the search strategy, which answers the same request differently", () => {
+    expect(searchFingerprint(request(), "EUR", OPTIMIZER_VERSION, "composed")).not.toBe(
+      searchFingerprint(request(), "EUR", OPTIMIZER_VERSION, "provider_round_trips"),
+    );
+  });
+
   it("changes with the currency and the optimizer version", () => {
     expect(searchFingerprint(request(), "BAM")).not.toBe(searchFingerprint(request(), "EUR"));
     expect(searchFingerprint(request(), "EUR", "other")).not.toBe(
