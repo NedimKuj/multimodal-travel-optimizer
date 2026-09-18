@@ -12,6 +12,7 @@ export default defineConfig({
   resolve: {
     // Tests run against workspace sources, not built dist output.
     alias: {
+      "@travel-optimizer/cli": packageSource("cli"),
       "@travel-optimizer/domain": packageSource("domain"),
       "@travel-optimizer/geo": packageSource("geo"),
       "@travel-optimizer/optimizer": packageSource("optimizer"),

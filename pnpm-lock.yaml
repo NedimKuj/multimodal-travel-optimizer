@@ -185,6 +185,21 @@ importers:
         specifier: ^5.0.1
         version: 5.0.1(@types/node@26.6.1)(vite@8.3.0(@types/node@26.6.1))
 
+  packages/cli:
+    dependencies:
+      '@travel-optimizer/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@travel-optimizer/geo':
+        specifier: workspace:*
+        version: link:../geo
+      '@travel-optimizer/optimizer':
+        specifier: workspace:*
+        version: link:../optimizer
+      '@travel-optimizer/providers':
+        specifier: workspace:*
+        version: link:../providers
+
   packages/domain:
     dependencies:
       zod:

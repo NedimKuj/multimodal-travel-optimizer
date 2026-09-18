@@ -1,0 +1,146 @@
+import { describe, expect, it } from "vitest";
+
+import { parseArguments, type CliOptions } from "./args.js";
+
+const base = [
+  "--origin",
+  "SJJ",
+  "--from",
+  "2026-12-26",
+  "--to",
+  "2027-01-03",
+];
+
+function parsed(args: readonly string[]): CliOptions {
+  const result = parseArguments(args);
+  if (!result.ok) {
+    throw new Error("help" in result ? "help" : result.issues.map((i) => i.message).join("; "));
+  }
+  return result.options;
+}
+
+function issues(args: readonly string[]): string[] {
+  const result = parseArguments(args);
+  if (result.ok || "help" in result) return [];
+  return result.issues.map((issue) => issue.message);
+}
+
+describe("parseArguments", () => {
+  it("parses the reference scenario", () => {
+    const options = parsed([
+      ...base,
+      "--nights",
+      "5:7",
+      "--flex",
+      "2",
+      "--people",
+      "2",
+      "--budget",
+      "700",
+    ]);
+    expect(options).toEqual({
+      origin: "SJJ",
+      destination: null,
+      from: "2026-12-26",
+      to: "2027-01-03",
+      flexibilityDays: 2,
+      nights: { min: 5, max: 7 },
+      travelers: 2,
+      budget: { kind: "perPerson", amount: { amountMinor: 70000, currency: "EUR" } },
+      currency: "EUR",
+      limit: 10,
+      json: false,
+    });
+  });
+
+  it("applies only the documented defaults", () => {
+    const options = parsed(base);
+    expect(options).toMatchObject({
+      destination: null,
+      flexibilityDays: 0,
+      travelers: 1,
+      currency: "EUR",
+      limit: 10,
+      json: false,
+    });
+    expect(options.nights).toBeUndefined();
+    expect(options.budget).toBeUndefined();
+  });
+
+  it("normalizes codes to upper case", () => {
+    const options = parsed(["--origin", "sjj", "--destination", "ist", "--from", "2026-12-26", "--to", "2027-01-03"]);
+    expect(options.origin).toBe("SJJ");
+    expect(options.destination).toBe("IST");
+  });
+
+  it("reads a single --nights value as an exact stay", () => {
+    expect(parsed([...base, "--nights", "6"]).nights).toEqual({ min: 6, max: 6 });
+  });
+
+  it("honours --budget-basis total without multiplying it", () => {
+    const options = parsed([...base, "--budget", "1400", "--budget-basis", "total"]);
+    expect(options.budget).toEqual({
+      kind: "total",
+      amount: { amountMinor: 140000, currency: "EUR" },
+    });
+  });
+
+  it("parses a budget in another currency", () => {
+    const options = parsed([...base, "--budget", "1370", "--currency", "bam"]);
+    expect(options.currency).toBe("BAM");
+    expect(options.budget).toEqual({
+      kind: "perPerson",
+      amount: { amountMinor: 137000, currency: "BAM" },
+    });
+  });
+
+  it("requires origin and both dates", () => {
+    expect(issues(["--from", "2026-12-26", "--to", "2027-01-03"])).toEqual([
+      expect.stringContaining("--origin is required"),
+    ]);
+    expect(issues(["--origin", "SJJ"]).length).toBe(2);
+  });
+
+  it("rejects malformed values instead of falling back", () => {
+    expect(issues([...base, "--nights", "seven"])[0]).toContain("--nights");
+    expect(issues([...base, "--nights", "7:5"])[0]).toContain("below the minimum");
+    expect(issues([...base, "--people", "0"])[0]).toContain("--people");
+    expect(issues([...base, "--people", "1.5"])[0]).toContain("--people");
+    expect(issues([...base, "--flex", "-1"])[0]).toContain("--flex");
+    expect(issues([...base, "--budget", "seven hundred"])[0]).toContain("--budget");
+    expect(issues([...base, "--budget", "0"])[0]).toContain("greater than zero");
+    expect(issues([...base, "--currency", "XYZ"])[0]).toContain("not a supported currency");
+    expect(issues(["--origin", "SJJ", "--from", "not-a-date", "--to", "2027-01-03"])[0]).toContain(
+      "YYYY-MM-DD",
+    );
+  });
+
+  it("rejects a budget amount with impossible precision for its currency", () => {
+    expect(issues([...base, "--budget", "700.005"])[0]).toContain("--budget");
+  });
+
+  it("rejects --budget-basis without --budget", () => {
+    expect(issues([...base, "--budget-basis", "total"])[0]).toContain("requires --budget");
+  });
+
+  it("rejects an unknown budget basis", () => {
+    expect(issues([...base, "--budget", "700", "--budget-basis", "per-trip"])[0]).toContain(
+      "per-person or total",
+    );
+  });
+
+  it("rejects reversed dates", () => {
+    expect(issues(["--origin", "SJJ", "--from", "2027-01-03", "--to", "2026-12-26"])[0]).toContain(
+      "is after",
+    );
+  });
+
+  it("rejects unknown flags rather than ignoring them", () => {
+    expect(issues([...base, "--hotels"])[0]).toBeDefined();
+  });
+
+  it("reports help", () => {
+    const result = parseArguments(["--help"]);
+    expect(result).toEqual({ ok: false, help: true });
+  });
+});
