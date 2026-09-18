@@ -89,7 +89,6 @@ describe("AviasalesFlightProvider", () => {
     expect(urls[0]).toContain("unique=true");
     expect(urls[0]).toContain("one_way=true");
     expect(urls[0]).not.toContain("secret-token");
-    expect(urls[0]).not.toContain("secret-token");
     expect(result.status).toBe("ok");
   });
 

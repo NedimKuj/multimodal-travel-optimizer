@@ -46,7 +46,12 @@ export interface GroundTransferConfig {
   readonly perTraveler: boolean;
   /** Minutes to leave between a transfer and the transport it connects to. */
   readonly connectionBufferMinutes: number;
-  /** Airports beyond this distance from their city get an explicit transfer. */
+  /**
+   * Great-circle distance understates a road journey. Distances are multiplied
+   * by this before estimating time, cost and the access threshold.
+   */
+  readonly roadDetourFactor: number;
+  /** Airports beyond this road distance from their city get a transfer. */
   readonly accessThresholdKm: number;
   readonly overrides: readonly GroundTransferOverride[];
 }
@@ -55,8 +60,9 @@ export interface GroundTransferConfig {
  * Deliberately rough, region-agnostic defaults. They are a starting point, not
  * researched local fares: override them where we know better.
  *
- * Sanity check at the defaults: 30 km costs about EUR 9 and takes 56 minutes;
- * 110 km costs about EUR 25 and takes 152 minutes.
+ * Sanity check at the defaults, on straight-line distance: 23 km (Fiumicino to
+ * Rome) becomes about 30 km of road, EUR 9 and 56 minutes; 110 km (Memmingen to
+ * Munich) becomes about 143 km, EUR 32 and 192 minutes.
  */
 export const DEFAULT_GROUND_TRANSFER_CONFIG: GroundTransferConfig = {
   currency: "EUR",
@@ -66,12 +72,19 @@ export const DEFAULT_GROUND_TRANSFER_CONFIG: GroundTransferConfig = {
   costPerKmMinor: 20,
   perTraveler: true,
   connectionBufferMinutes: 30,
-  accessThresholdKm: 25,
+  // A straight line between two points is not a road. 1.3 is a common
+  // detour approximation and keeps the threshold honest: Fiumicino is 23 km
+  // from Rome as the crow flies but about 32 km to drive.
+  roadDetourFactor: 1.3,
+  accessThresholdKm: 20,
   overrides: [],
 };
 
 export interface GroundTransferEstimate {
+  /** Straight-line distance, as measured. */
   readonly distanceKm: number;
+  /** Estimated road distance: `distanceKm` times the detour factor. */
+  readonly roadDistanceKm: number;
   readonly durationMinutes: number;
   readonly price: Money;
   readonly overridden: boolean;
@@ -97,24 +110,31 @@ export function estimateGroundTransfer(
   config: GroundTransferConfig = DEFAULT_GROUND_TRANSFER_CONFIG,
 ): GroundTransferEstimate {
   const override = findOverride(from, to, config);
+  const roadDistanceKm = distanceKm * config.roadDetourFactor;
   const durationMinutes =
     override?.durationMinutes ??
-    Math.max(1, Math.round(config.baseMinutes + distanceKm * config.minutesPerKm));
+    Math.max(1, Math.round(config.baseMinutes + roadDistanceKm * config.minutesPerKm));
   const costMinor =
     override?.costMinor ??
-    Math.max(0, Math.round(config.baseCostMinor + distanceKm * config.costPerKmMinor));
+    Math.max(0, Math.round(config.baseCostMinor + roadDistanceKm * config.costPerKmMinor));
 
   return {
     distanceKm,
+    roadDistanceKm,
     durationMinutes,
     price: money(costMinor, config.currency),
     overridden: override !== undefined,
   };
 }
 
-/** Whether an airport is far enough from its city to need an explicit transfer. */
+/**
+ * Whether an airport is far enough from its city to need an explicit transfer.
+ *
+ * Compared on estimated road distance, because that is the journey the
+ * traveler actually makes.
+ */
 export function needsAccessTransfer(distanceKm: number, config: GroundTransferConfig): boolean {
-  return distanceKm > config.accessThresholdKm;
+  return distanceKm * config.roadDetourFactor > config.accessThresholdKm;
 }
 
 export interface GroundTransferLeg {
@@ -186,7 +206,7 @@ export function buildGroundTransferLeg(input: BuildTransferInput): GroundTransfe
       : { kind: "total", travelers: input.travelers },
     provenance: {
       provider: ESTIMATE_SOURCE,
-      providerReference: `${String(Math.round(estimate.distanceKm))}km`,
+      providerReference: `${String(Math.round(estimate.roadDistanceKm))}km road (est.)`,
       sourceType: "estimated",
       fetchedAt: input.fetchedAt,
     },

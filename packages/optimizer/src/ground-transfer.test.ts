@@ -14,10 +14,11 @@ const fetchedAt = parseUtcInstant("2026-09-18T09:00:00Z");
 
 describe("estimateGroundTransfer", () => {
   it("scales time and cost with distance", () => {
+    // Distances are straight-line; the model adds a road detour factor.
     const short = estimateGroundTransfer(FCO, ROME, 30);
     const long = estimateGroundTransfer(FCO, ROME, 110);
-    expect(short).toMatchObject({ durationMinutes: 56, price: { amountMinor: 900 } });
-    expect(long).toMatchObject({ durationMinutes: 152, price: { amountMinor: 2500 } });
+    expect(short).toMatchObject({ roadDistanceKm: 39, durationMinutes: 67, price: { amountMinor: 1080 } });
+    expect(long).toMatchObject({ durationMinutes: 192, price: { amountMinor: 3160 } });
   });
 
   it("never returns a zero-minute transfer", () => {
@@ -49,9 +50,11 @@ describe("estimateGroundTransfer", () => {
 describe("needsAccessTransfer", () => {
   it("attaches a transfer only beyond the threshold", () => {
     const config = DEFAULT_GROUND_TRANSFER_CONFIG;
-    expect(needsAccessTransfer(15, config)).toBe(false); // Ciampino-like
-    expect(needsAccessTransfer(25, config)).toBe(false); // exactly at it
-    expect(needsAccessTransfer(30, config)).toBe(true); // Fiumicino-like
+    // Compared on road distance: 20 km of road, so about 15 km straight-line.
+    expect(needsAccessTransfer(10, config)).toBe(false); // in town
+    expect(needsAccessTransfer(15, config)).toBe(false); // Ciampino-like, 19.5 km road
+    expect(needsAccessTransfer(16, config)).toBe(true); // 20.8 km road
+    expect(needsAccessTransfer(23, config)).toBe(true); // Fiumicino-like, 30 km road
     expect(needsAccessTransfer(110, config)).toBe(true); // Memmingen-like
   });
 });
@@ -70,9 +73,9 @@ describe("buildGroundTransferLeg", () => {
       anchorRole: "arrive_before",
       fetchedAt,
     });
-    // 30 minute buffer before the flight, 56 minutes of travel before that.
+    // 30 minute buffer before the flight, 67 minutes of travel before that.
     expect(segment.arrivalAt.instant).toBe("2026-12-27T08:30:00.000Z");
-    expect(segment.departureAt.instant).toBe("2026-12-27T07:34:00.000Z");
+    expect(segment.departureAt.instant).toBe("2026-12-27T07:23:00.000Z");
     expect(segment.durationMinutes).toBe(estimate.durationMinutes);
     expect(segment.mode).toBe("ground_transfer");
   });
@@ -89,7 +92,7 @@ describe("buildGroundTransferLeg", () => {
       fetchedAt,
     });
     expect(segment.departureAt.instant).toBe("2026-12-27T09:30:00.000Z");
-    expect(segment.arrivalAt.instant).toBe("2026-12-27T10:26:00.000Z");
+    expect(segment.arrivalAt.instant).toBe("2026-12-27T10:37:00.000Z");
   });
 
   it("labels the price estimated and attributes it to the model, not a provider", () => {
@@ -124,7 +127,7 @@ describe("buildGroundTransferLeg", () => {
       fetchedAt,
     });
     expect(offer.priceBasis).toEqual({ kind: "perTraveler" });
-    expect(offer.price).toEqual({ amountMinor: 900, currency: "EUR" });
+    expect(offer.price).toEqual({ amountMinor: 1080, currency: "EUR" });
   });
 
   it("can price for the whole party when configured that way", () => {

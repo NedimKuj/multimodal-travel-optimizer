@@ -79,8 +79,8 @@ describe("formatSearch", () => {
   it("shows per-person and total cost, labelled transport only", async () => {
     const output = formatSearch(await trace(), { limit: 10 });
     // 79.00 fare plus two estimated transfers, per traveler.
-    expect(output).toContain("101.00 EUR / person · 202.00 EUR total · transport only");
-    expect(output).toContain("Fare: cached · includes estimated access transfer (44.00 EUR)");
+    expect(output).toContain("105.80 EUR / person · 211.60 EUR total · transport only");
+    expect(output).toContain("Fare: cached · includes estimated access transfer (53.60 EUR)");
     expect(output).toContain("Transport only: accommodation and extras are not included");
     expect(output).toContain("Airport transfers are estimates from a distance model, not quotes");
   });
@@ -94,7 +94,7 @@ describe("formatSearch", () => {
   it("shows the estimated access transfer as its own leg", async () => {
     const output = formatSearch(await trace([romeTrip]), { limit: 10 });
     // Fiumicino is 30 km from Rome, so the transfer is explicit.
-    expect(output).toContain("transfer 2026-12-27 12:15 FCO → 2026-12-27 13:11 ROM");
+    expect(output).toContain("transfer 2026-12-27 12:15 FCO → 2026-12-27 13:22 ROM");
     expect(output).toContain("· estimated");
   });
 
@@ -185,8 +185,8 @@ describe("formatSearch", () => {
       ),
       { limit: 10 },
     );
-    // 33.33 fare + two 9.00 transfers, each per traveler: 51.33 x 3 = 153.99.
-    expect(output).toContain("51.33 EUR / person · 153.99 EUR total");
+    // 33.33 fare + two 10.80 transfers, each per traveler: 54.93 x 3 = 164.79.
+    expect(output).toContain("54.93 EUR / person · 164.79 EUR total");
   });
 
   it("names an airport-only destination when no city resolves", async () => {

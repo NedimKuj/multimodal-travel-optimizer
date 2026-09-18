@@ -86,10 +86,10 @@ describe("exploreFlights", () => {
     const [cheapest] = result.destinations;
     const best = cheapest?.candidates[0];
     // 79.00 fare per traveler x 2, counted once, plus two estimated transfers
-    // to and from Istanbul (11.00 each per traveler).
+    // to and from Istanbul (13.40 each per traveler).
     expect(best?.summary.cost.fares).toEqual({ amountMinor: 15800, currency: "EUR" });
-    expect(best?.summary.cost.groundTransfer).toEqual({ amountMinor: 4400, currency: "EUR" });
-    expect(best?.summary.cost.total).toEqual({ amountMinor: 20200, currency: "EUR" });
+    expect(best?.summary.cost.groundTransfer).toEqual({ amountMinor: 5360, currency: "EUR" });
+    expect(best?.summary.cost.total).toEqual({ amountMinor: 21160, currency: "EUR" });
     expect(best?.nights).toBe(6);
   });
 
@@ -311,8 +311,8 @@ describe("exploreFlights — access transfers and feasibility", () => {
       "ground_transfer",
       "flight",
     ]);
-    // 9.00 each way, per traveler, for two travelers.
-    expect(candidate?.summary.cost.groundTransfer).toEqual({ amountMinor: 3600, currency: "EUR" });
+    // 10.80 each way, per traveler, for two travelers.
+    expect(candidate?.summary.cost.groundTransfer).toEqual({ amountMinor: 4320, currency: "EUR" });
   });
 
   it("lets a dearer fare into a near airport beat a cheap one into a far airport", async () => {
@@ -340,7 +340,7 @@ describe("exploreFlights — access transfers and feasibility", () => {
     expect(winner?.summary.cost.total).toEqual({ amountMinor: 16400, currency: "EUR" });
     // The far airport's fare is cheaper, but its total is not.
     expect(rome?.candidates[1]?.summary.cost.fares.amountMinor).toBe(15000);
-    expect(rome?.candidates[1]?.summary.cost.total.amountMinor).toBe(18600);
+    expect(rome?.candidates[1]?.summary.cost.total.amountMinor).toBe(19320);
   });
 
   it("rejects a fare whose connection cannot be made", async () => {
@@ -447,5 +447,48 @@ describe("exploreFlights — alternative origins", () => {
       fareSourceType: "cached",
       partiallyEstimated: true,
     });
+  });
+});
+
+describe("exploreFlights — a transfer that starts the day before", () => {
+  it("validates an early flight reached by an overnight transfer", async () => {
+    // Leaves Tuzla at 01:30; the drive there starts the previous evening.
+    const earlyFromTuzla = {
+      segments: [
+        segment({
+          id: "tzl-early-out",
+          origin: TZL,
+          destination: CIA,
+          departure: "2026-12-27T01:30+01:00",
+          arrival: "2026-12-27T03:00+01:00",
+        }),
+        segment({
+          id: "tzl-early-back",
+          origin: CIA,
+          destination: TZL,
+          departure: "2027-01-01T18:00+01:00",
+          arrival: "2027-01-01T19:30+01:00",
+        }),
+      ],
+      offer: offer("tzl-early-fare", ["tzl-early-out", "tzl-early-back"], 6000),
+    };
+    const result = await exploreFlights(
+      request({ alternativeAirports: true }),
+      {
+        flightProvider: stubFlightProvider(searchResult([earlyFromTuzla])),
+        cities: cityRepository,
+        geography: fixtureGeography,
+        airports: fixtureAirports,
+      },
+      options,
+    );
+    const candidate = result.destinations[0]?.candidates[0];
+    expect(result.counts.rejectedInfeasible).toBe(0);
+    // The drive begins on the 26th, before the flight's date.
+    const [firstLeg] = candidate?.candidate.segments ?? [];
+    expect(firstLeg?.mode).toBe("ground_transfer");
+    expect(firstLeg?.departureAt.instant.slice(0, 10)).toBe("2026-12-26");
+    // The requested departure date is still the flight's.
+    expect(candidate?.summary.departureDate).toBe("2026-12-27");
   });
 });

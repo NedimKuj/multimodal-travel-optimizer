@@ -34,12 +34,15 @@ segments, `SELECTABLE_TRANSPORT_MODES` for requests).
 The estimate comes from a documented, configurable model:
 
 ```text
-durationMinutes = baseMinutes + distanceKm x minutesPerKm
-cost            = baseCost     + distanceKm x costPerKm
+roadDistanceKm  = greatCircleKm x roadDetourFactor   (default 1.3)
+durationMinutes = baseMinutes + roadDistanceKm x minutesPerKm
+cost            = baseCost    + roadDistanceKm x costPerKm
 ```
 
-with per-pair overrides for cases we know better. Distance is great-circle, so
-the estimate is approximate by construction, and is never presented otherwise:
+with per-pair overrides for cases we know better. A straight line between two
+points is not a road, so the measured distance is inflated by a detour factor
+before anything is estimated from it. The result is approximate by
+construction, and is never presented otherwise:
 
 - `sourceType: "estimated"`, with the estimating model named as the source
   rather than a provider,
@@ -51,9 +54,15 @@ An estimated price is never a bookable price and never a verified one.
 
 ### 3. Access transfers are attached only when material
 
-An airport further from its city than a configured threshold (default 25 km)
-gets an explicit transfer leg; one inside it does not. FCO (~30 km) and
-FMM→Munich (~110 km) qualify; CIA (~15 km) does not.
+An airport further from its city than a configured threshold (default 20 km)
+gets an explicit transfer leg; one inside it does not.
+
+The threshold is compared against **estimated road distance**, because that is
+the journey the traveler makes. Against the real reference data this matters:
+Fiumicino is 23 km from Rome in a straight line but about 30 km by road, so a
+straight-line threshold of 25 km would have excluded the very example this
+decision exists for (spec §19). Ciampino, at 15 km straight-line and about
+20 km by road, still does not qualify.
 
 The alternative — attaching a transfer to every candidate — would make every
 trip `estimated` and bury the distinction the estimate exists to draw.
