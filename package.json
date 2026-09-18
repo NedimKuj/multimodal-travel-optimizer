@@ -7,10 +7,13 @@
     "node": ">=26"
   },
   "scripts": {
+    "pretypecheck": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
+    "prelint": "pnpm -r build",
     "lint": "eslint .",
     "test": "vitest run",
-    "build": "pnpm -r build"
+    "build": "pnpm -r build",
+    "geo:fetch": "pnpm --filter @travel-optimizer/geo build && pnpm --filter @travel-optimizer/geo fetch:airports"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
