@@ -8,6 +8,7 @@ import {
   zonedTimestampFromOffsetIso,
   type CityRepository,
   type FlightProvider,
+  type FlightSearchQuery,
   type Location,
   type ProviderCallMetrics,
   type ProviderResult,
@@ -149,7 +150,7 @@ export const metrics: ProviderCallMetrics = {
 /** A FlightProvider stub that returns exactly what a test gives it. */
 export function stubFlightProvider(
   result: ProviderResult<TransportSearchResult>,
-  onQuery?: (query: unknown) => void,
+  onQuery?: (query: FlightSearchQuery) => void,
 ): FlightProvider {
   return {
     descriptor: {

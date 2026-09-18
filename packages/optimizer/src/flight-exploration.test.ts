@@ -52,7 +52,7 @@ describe("exploreFlights", () => {
       request(),
       {
         flightProvider: stubFlightProvider(searchResult([romeTrip]), (query) => {
-          seen = query as FlightSearchQuery;
+          seen = query;
         }),
         cities: cityRepository,
       },
