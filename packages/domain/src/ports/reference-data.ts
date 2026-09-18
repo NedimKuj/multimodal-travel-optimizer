@@ -37,8 +37,27 @@ export interface AirportRepository {
   findByIata(iata: string): Location | undefined;
 }
 
+/**
+ * Resolves cities, and the city an airport belongs to.
+ *
+ * Destinations shown to a traveler are cities, while itineraries are built from
+ * airports (docs/decisions/0010-city-destinations.md). Several airports can
+ * belong to one city, so this mapping is many-to-one.
+ */
+export interface CityRepository {
+  readonly provenance: ReferenceDataProvenance;
+  /** The city for an exact, uppercase city code (e.g. `ROM`). */
+  findByCode(code: string): Location | undefined;
+  /** The city an airport belongs to, if the reference data knows it. */
+  findForAirport(airport: Location): Location | undefined;
+}
+
 export type AirportLookup =
   | { readonly ok: true; readonly airport: Location }
+  | { readonly ok: false; readonly issue: ReferenceDataIssue };
+
+export type CityLookup =
+  | { readonly ok: true; readonly city: Location }
   | { readonly ok: false; readonly issue: ReferenceDataIssue };
 
 const IATA_PATTERN = /^[A-Z]{3}$/;
@@ -74,4 +93,29 @@ export function lookupAirport(repository: AirportRepository, iata: string): Airp
     };
   }
   return { ok: true, airport };
+}
+
+/**
+ * Finds the city an airport belongs to.
+ *
+ * An unknown mapping is a data-quality failure the caller reports and counts.
+ * The candidate still stands on its airport identity: no city is invented, and
+ * nothing about cost or feasibility depends on this lookup.
+ */
+export function lookupCityForAirport(
+  repository: CityRepository,
+  airport: Location,
+): CityLookup {
+  const city = repository.findForAirport(airport);
+  if (city === undefined) {
+    return {
+      ok: false,
+      issue: {
+        code: "UNKNOWN_CITY_FOR_AIRPORT",
+        message: `No city in the reference dataset for airport ${airport.id}`,
+        ...(airport.iata !== undefined && { iata: airport.iata }),
+      },
+    };
+  }
+  return { ok: true, city };
 }
