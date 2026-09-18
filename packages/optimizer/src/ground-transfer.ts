@@ -136,6 +136,8 @@ export interface BuildTransferInput {
   /** Anchor: the transfer ends this long before it, or starts this long after. */
   readonly anchor: ZonedTimestamp;
   readonly anchorRole: "arrive_before" | "depart_after";
+  /** Minutes to leave against the anchor; defaults to the config value. */
+  readonly bufferMinutes?: number;
   readonly fetchedAt: UtcInstant;
   readonly config?: GroundTransferConfig;
 }
@@ -150,22 +152,17 @@ export interface BuildTransferInput {
 export function buildGroundTransferLeg(input: BuildTransferInput): GroundTransferLeg {
   const config = input.config ?? DEFAULT_GROUND_TRANSFER_CONFIG;
   const estimate = estimateGroundTransfer(input.from, input.to, input.distanceKm, config);
+  const buffer = input.bufferMinutes ?? config.connectionBufferMinutes;
 
   const [departureIso, arrivalIso] =
     input.anchorRole === "arrive_before"
       ? [
-          shiftInstant(
-            input.anchor.instant,
-            -(estimate.durationMinutes + config.connectionBufferMinutes),
-          ),
-          shiftInstant(input.anchor.instant, -config.connectionBufferMinutes),
+          shiftInstant(input.anchor.instant, -(estimate.durationMinutes + buffer)),
+          shiftInstant(input.anchor.instant, -buffer),
         ]
       : [
-          shiftInstant(input.anchor.instant, config.connectionBufferMinutes),
-          shiftInstant(
-            input.anchor.instant,
-            config.connectionBufferMinutes + estimate.durationMinutes,
-          ),
+          shiftInstant(input.anchor.instant, buffer),
+          shiftInstant(input.anchor.instant, buffer + estimate.durationMinutes),
         ];
 
   const segment = transportSegmentSchema.parse({

@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { exploreFlights } from "./flight-exploration.js";
 import {
   cityRepository,
+  fixtureGeography,
   CIA,
   FCO,
   metrics,
@@ -40,7 +41,7 @@ async function explore(
 ) {
   return exploreFlights(
     request(overrides),
-    { flightProvider: stubFlightProvider(searchResult(parts)), cities: cityRepository },
+    { flightProvider: stubFlightProvider(searchResult(parts)), cities: cityRepository, geography: fixtureGeography },
     options,
   );
 }
@@ -55,6 +56,7 @@ describe("exploreFlights", () => {
           seen = query;
         }),
         cities: cityRepository,
+        geography: fixtureGeography,
       },
       options,
     );
@@ -78,11 +80,13 @@ describe("exploreFlights", () => {
       "Rome",
     ]);
     const [cheapest] = result.destinations;
-    expect(cheapest?.candidates[0]?.summary.cost.total).toEqual({
-      amountMinor: 15800, // 79.00 per traveler x 2, counted once
-      currency: "EUR",
-    });
-    expect(cheapest?.candidates[0]?.nights).toBe(6);
+    const best = cheapest?.candidates[0];
+    // 79.00 fare per traveler x 2, counted once, plus two estimated transfers
+    // to and from Istanbul (11.00 each per traveler).
+    expect(best?.summary.cost.fares).toEqual({ amountMinor: 15800, currency: "EUR" });
+    expect(best?.summary.cost.groundTransfer).toEqual({ amountMinor: 4400, currency: "EUR" });
+    expect(best?.summary.cost.total).toEqual({ amountMinor: 20200, currency: "EUR" });
+    expect(best?.nights).toBe(6);
   });
 
   it("labels costs as transport-only, never a complete-trip cost", async () => {
@@ -90,9 +94,12 @@ describe("exploreFlights", () => {
     expect(result.destinations[0]?.candidates[0]?.summary.cost.scope).toBe(
       "transport_and_partial_accommodation",
     );
+    // The fare stays cached; only the transfer is estimated (ADR 0011).
     expect(result.destinations[0]?.candidates[0]?.summary.provenance).toMatchObject({
       fareSourceType: "cached",
-      partiallyEstimated: false,
+      fareSources: ["fixture-flights"],
+      estimatedComponents: ["access_transfer"],
+      partiallyEstimated: true,
     });
   });
 
@@ -222,6 +229,7 @@ describe("exploreFlights — provider outcomes", () => {
           ], metrics),
         ),
         cities: cityRepository,
+        geography: fixtureGeography,
       },
       options,
     );
@@ -243,6 +251,7 @@ describe("exploreFlights — provider outcomes", () => {
           ),
         ),
         cities: cityRepository,
+        geography: fixtureGeography,
       },
       options,
     );
@@ -267,5 +276,87 @@ describe("exploreFlights — provider outcomes", () => {
     expect(first.destinations.map((d) => d.candidates.map((c) => c.candidate.id))).toEqual(
       second.destinations.map((d) => d.candidates.map((c) => c.candidate.id)),
     );
+  });
+});
+
+describe("exploreFlights — access transfers and feasibility", () => {
+  it("attaches a transfer for a far airport and none for a near one", async () => {
+    // Fiumicino is 30 km from Rome; Ciampino is 15 km.
+    const viaCiampino = roundTrip({
+      id: "rome-cia",
+      destination: CIA,
+      outbound: ["2026-12-27T08:00+01:00", "2026-12-27T09:30+01:00"],
+      inbound: ["2027-01-02T20:00+01:00", "2027-01-02T21:30+01:00"],
+      amountMinor: 12000,
+    });
+    const result = await explore([viaCiampino]);
+    const candidate = result.destinations[0]?.candidates[0];
+    expect(candidate?.candidate.segments.map((s) => s.mode)).toEqual(["flight", "flight"]);
+    expect(candidate?.summary.cost.groundTransfer.amountMinor).toBe(0);
+    expect(candidate?.summary.provenance.partiallyEstimated).toBe(false);
+  });
+
+  it("counts a far airport's transfer in the total, both ways", async () => {
+    const result = await explore([romeTrip]);
+    const candidate = result.destinations[0]?.candidates[0];
+    expect(candidate?.candidate.segments.map((s) => s.mode)).toEqual([
+      "flight",
+      "ground_transfer",
+      "ground_transfer",
+      "flight",
+    ]);
+    // 9.00 each way, per traveler, for two travelers.
+    expect(candidate?.summary.cost.groundTransfer).toEqual({ amountMinor: 3600, currency: "EUR" });
+  });
+
+  it("lets a dearer fare into a near airport beat a cheap one into a far airport", async () => {
+    // Spec §19: FMM at EUR 75 plus a transfer should lose to MUC at EUR 100.
+    const cheapFarAirport = roundTrip({
+      id: "far",
+      destination: FCO, // 30 km out
+      outbound: ["2026-12-27T08:00+01:00", "2026-12-27T09:30+01:00"],
+      inbound: ["2027-01-02T20:00+01:00", "2027-01-02T21:30+01:00"],
+      amountMinor: 7500,
+    });
+    const dearerNearAirport = roundTrip({
+      id: "near",
+      destination: CIA, // 15 km out, no transfer
+      outbound: ["2026-12-27T08:00+01:00", "2026-12-27T09:30+01:00"],
+      inbound: ["2027-01-02T20:00+01:00", "2027-01-02T21:30+01:00"],
+      amountMinor: 8200,
+    });
+    const result = await explore([cheapFarAirport, dearerNearAirport]);
+    const [rome] = result.destinations;
+    // Both are Rome, so they compete inside one destination.
+    expect(rome?.candidates).toHaveLength(2);
+    const winner = rome?.candidates[0];
+    expect(winner?.candidate.id).toContain("near");
+    expect(winner?.summary.cost.total).toEqual({ amountMinor: 16400, currency: "EUR" });
+    // The far airport's fare is cheaper, but its total is not.
+    expect(rome?.candidates[1]?.summary.cost.fares.amountMinor).toBe(15000);
+    expect(rome?.candidates[1]?.summary.cost.total.amountMinor).toBe(18600);
+  });
+
+  it("rejects a fare whose connection cannot be made", async () => {
+    // A 30-minute turnaround at the same airport: 120 minutes are required.
+    const impossible = roundTrip({
+      id: "impossible",
+      destination: CIA,
+      outbound: ["2026-12-27T08:00+01:00", "2026-12-27T09:30+01:00"],
+      inbound: ["2026-12-27T10:00+01:00", "2026-12-27T11:30+01:00"],
+      amountMinor: 5000,
+    });
+    const result = await explore([impossible]);
+    expect(result.counts.rejectedInfeasible).toBe(1);
+    expect(result.destinations).toEqual([]);
+    expect(result.issues.map((issue) => issue.code)).toContain("INFEASIBLE_CONNECTION");
+  });
+
+  it("keeps the transfer out of the requested date window", async () => {
+    // The window bounds the flights; a transfer either side does not move them.
+    const result = await explore([romeTrip]);
+    const candidate = result.destinations[0]?.candidates[0];
+    expect(candidate?.summary.departureDate).toBe("2026-12-27");
+    expect(candidate?.summary.returnDate).toBe("2027-01-02");
   });
 });

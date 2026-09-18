@@ -2,6 +2,7 @@ import { resolve } from "node:path";
 
 import {
   normalizeSearchRequest,
+  type AirportGeography,
   type AirportRepository,
   type CityRepository,
   type DomainIssue,
@@ -42,6 +43,7 @@ export interface RunOverrides {
   readonly referenceData?: {
     readonly airports: AirportRepository;
     readonly cities: CityRepository;
+    readonly geography: AirportGeography;
   };
   readonly flightProvider?: FlightProvider;
 }
@@ -120,7 +122,11 @@ export async function run(
   if (referenceData === undefined) {
     try {
       const loaded = await loadReferenceData();
-      referenceData = { airports: loaded.airports.repository, cities: loaded.cities.repository };
+      referenceData = {
+        airports: loaded.airports.repository,
+        cities: loaded.cities.repository,
+        geography: loaded.geography.geography,
+      };
     } catch (error) {
       if (error instanceof SnapshotUnavailableError) {
         io.stderr(`${error.message}\n`);
@@ -143,7 +149,7 @@ export async function run(
 
   const trace = await runFlightSearch(
     normalized.request,
-    { flightProvider: provider, cities: referenceData.cities },
+    { flightProvider: provider, cities: referenceData.cities, geography: referenceData.geography },
     { currency: options.currency },
   );
 

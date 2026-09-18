@@ -3,7 +3,9 @@ import {
   compareMoney,
   localDate,
   lookupCityForAirport,
+  parseUtcInstant,
   summarizeTrip,
+  type AirportGeography,
   type CityRepository,
   type CurrencyCode,
   type DomainIssue,
@@ -19,6 +21,18 @@ import {
   type TripSummary,
 } from "@travel-optimizer/domain";
 
+import {
+  DEFAULT_CONNECTION_RULES,
+  requiredConnectionMinutes,
+  validateConnections,
+  type ConnectionRules,
+} from "./connection-rules.js";
+import {
+  buildGroundTransferLeg,
+  DEFAULT_GROUND_TRANSFER_CONFIG,
+  needsAccessTransfer,
+  type GroundTransferConfig,
+} from "./ground-transfer.js";
 import { evaluateTrip, resolveTravelWindow, type TravelWindow } from "./travel-window.js";
 
 /*
@@ -52,6 +66,8 @@ export interface ExplorationCounts {
   readonly offersReturned: number;
   readonly candidatesBuilt: number;
   readonly rejectedNotRoundTrip: number;
+  /** Rejected because a connection was too short to be travelled. */
+  readonly rejectedInfeasible: number;
   readonly rejectedInvalid: number;
   readonly rejectedOutsideWindow: number;
   readonly rejectedNights: number;
@@ -73,18 +89,25 @@ export interface FlightExplorationResult {
 export interface FlightExplorationDeps {
   readonly flightProvider: FlightProvider;
   readonly cities: CityRepository;
+  /** Used to measure airport-to-city distance for access transfers. */
+  readonly geography: AirportGeography;
 }
 
 export interface FlightExplorationOptions {
   /** Currency to search in; must match the budget's currency when one is set. */
   readonly currency: CurrencyCode;
   readonly signal?: AbortSignal;
+  readonly connectionRules?: ConnectionRules;
+  readonly groundTransfer?: GroundTransferConfig;
+  /** Injected so estimates carry a deterministic timestamp in tests. */
+  readonly now?: () => Date;
 }
 
 const emptyCounts: ExplorationCounts = {
   offersReturned: 0,
   candidatesBuilt: 0,
   rejectedNotRoundTrip: 0,
+  rejectedInfeasible: 0,
   rejectedInvalid: 0,
   rejectedOutsideWindow: 0,
   rejectedNights: 0,
@@ -129,12 +152,98 @@ type AttemptOutcome =
   | { readonly ok: true; readonly attempt: CandidateAttempt }
   | { readonly ok: false; readonly counter: keyof ExplorationCounts; readonly issue?: DomainIssue };
 
-/** Turns one offer into a validated, in-window, in-budget candidate. */
+interface CandidateContext {
+  readonly cities: CityRepository;
+  readonly geography: AirportGeography;
+  readonly connectionRules: ConnectionRules;
+  readonly groundTransfer: GroundTransferConfig;
+  readonly fetchedAt: ReturnType<typeof parseUtcInstant>;
+}
+
+interface AccessTransfers {
+  readonly segments: TransportSegment[];
+  readonly offers: TransportOffer[];
+  /** Where the traveler actually is at each end of the stay. */
+  readonly arrivalInCity?: TransportSegment;
+  readonly departureFromCity?: TransportSegment;
+}
+
+/**
+ * Adds transfers between an airport and its city when the airport is far
+ * enough away to matter (ADR 0011), so a cheap fare into a distant airport is
+ * compared on the same footing as a dearer one into a close airport.
+ *
+ * Buffers come from the connection rules, not a fixed figure: a bus arriving
+ * at a terminal must still leave the airport's check-in time (ADR 0012 §4).
+ */
+function buildAccessTransfers(
+  outbound: TransportSegment,
+  inbound: TransportSegment,
+  request: SearchRequest,
+  context: CandidateContext,
+): AccessTransfers {
+  const airport = outbound.destination;
+  const lookup = lookupCityForAirport(context.cities, airport);
+  if (!lookup.ok) return { segments: [], offers: [] };
+
+  const city = lookup.city;
+  const distanceKm = context.geography.distanceBetween(airport, city);
+  if (!needsAccessTransfer(distanceKm, context.groundTransfer)) {
+    return { segments: [], offers: [] };
+  }
+
+  const bufferAfterArrival = requiredConnectionMinutes(airport, airport, context.connectionRules, {
+    arrivingBy: outbound.mode,
+    departingBy: "ground_transfer",
+  });
+  const bufferBeforeDeparture = requiredConnectionMinutes(
+    airport,
+    airport,
+    context.connectionRules,
+    { arrivingBy: "ground_transfer", departingBy: inbound.mode },
+  );
+  if (!bufferAfterArrival.ok || !bufferBeforeDeparture.ok) return { segments: [], offers: [] };
+
+  const intoCity = buildGroundTransferLeg({
+    id: `${outbound.id}:access-in`,
+    from: airport,
+    to: city,
+    distanceKm,
+    travelers: request.travelers,
+    anchor: outbound.arrivalAt,
+    anchorRole: "depart_after",
+    bufferMinutes: bufferAfterArrival.minutes,
+    fetchedAt: context.fetchedAt,
+    config: context.groundTransfer,
+  });
+  const backToAirport = buildGroundTransferLeg({
+    id: `${inbound.id}:access-out`,
+    from: city,
+    to: airport,
+    distanceKm,
+    travelers: request.travelers,
+    anchor: inbound.departureAt,
+    anchorRole: "arrive_before",
+    bufferMinutes: bufferBeforeDeparture.minutes,
+    fetchedAt: context.fetchedAt,
+    config: context.groundTransfer,
+  });
+
+  return {
+    segments: [intoCity.segment, backToAirport.segment],
+    offers: [intoCity.offer, backToAirport.offer],
+    arrivalInCity: intoCity.segment,
+    departureFromCity: backToAirport.segment,
+  };
+}
+
+/** Turns one offer into a validated, feasible, in-window, in-budget candidate. */
 function buildCandidate(
   offer: TransportOffer,
   segmentsById: ReadonlyMap<string, TransportSegment>,
   request: SearchRequest,
   window: TravelWindow,
+  context: CandidateContext,
 ): AttemptOutcome {
   const segments = offer.segmentIds.map((id) => segmentsById.get(id));
   const [outbound, inbound] = segments;
@@ -143,12 +252,35 @@ function buildCandidate(
     return { ok: false, counter: "rejectedNotRoundTrip" };
   }
 
+  const access = buildAccessTransfers(outbound, inbound, request, context);
+  const allSegments = [outbound, inbound, ...access.segments].sort((a, b) =>
+    a.departureAt.instant < b.departureAt.instant
+      ? -1
+      : a.departureAt.instant > b.departureAt.instant
+        ? 1
+        : 0,
+  );
+  const first = allSegments[0];
+  if (first === undefined) return { ok: false, counter: "rejectedInvalid" };
+
+  const feasibility = validateConnections(allSegments, context.connectionRules);
+  if (!feasibility.ok) {
+    return {
+      ok: false,
+      counter: "rejectedInfeasible",
+      issue: {
+        code: "INFEASIBLE_CONNECTION",
+        message: feasibility.issues.map((issue) => issue.message).join("; "),
+      },
+    };
+  }
+
   const candidate: TripCandidate = {
     id: `trip:${offer.id}`,
-    origin: outbound.origin,
+    origin: first.origin,
     travelers: request.travelers,
-    segments: [outbound, inbound],
-    offers: [offer],
+    segments: allSegments,
+    offers: [offer, ...access.offers],
     stays: [],
   };
 
@@ -164,11 +296,13 @@ function buildCandidate(
     };
   }
 
+  // The window bounds the flights the traveler asked for; nights count time in
+  // the destination city, which a transfer shifts (spec §8, §9).
   const evaluation = evaluateTrip(window, {
     tripStart: localDate(outbound.departureAt),
-    groundStart: localDate(outbound.arrivalAt),
-    groundEnd: localDate(inbound.departureAt),
-    tripEnd: localDate(inbound.arrivalAt),
+    groundStart: localDate((access.arrivalInCity ?? outbound).arrivalAt),
+    groundEnd: localDate((access.departureFromCity ?? inbound).departureAt),
+    tripEnd: localDate(inbound.departureAt),
   });
   if (!evaluation.ok) {
     return {
@@ -305,6 +439,14 @@ export async function exploreFlights(
     };
   }
 
+  const context: CandidateContext = {
+    cities: deps.cities,
+    geography: deps.geography,
+    connectionRules: options.connectionRules ?? DEFAULT_CONNECTION_RULES,
+    groundTransfer: options.groundTransfer ?? DEFAULT_GROUND_TRANSFER_CONFIG,
+    fetchedAt: parseUtcInstant((options.now ?? (() => new Date()))().toISOString()),
+  };
+
   const segmentsById = new Map(
     providerResult.data.segments.map((segment) => [segment.id, segment]),
   );
@@ -314,7 +456,7 @@ export async function exploreFlights(
 
   counts.offersReturned = providerResult.data.offers.length;
   for (const offer of providerResult.data.offers) {
-    const outcome = buildCandidate(offer, segmentsById, request, window);
+    const outcome = buildCandidate(offer, segmentsById, request, window, context);
     if (!outcome.ok) {
       counts[outcome.counter] += 1;
       if (outcome.issue !== undefined) issues.push(outcome.issue);

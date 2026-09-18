@@ -2,6 +2,7 @@ import { failedResult, type AirportRepository } from "@travel-optimizer/domain";
 import {
   cityRepository,
   FCO,
+  fixtureGeography,
   metrics,
   roundTrip,
   SJJ,
@@ -44,7 +45,7 @@ function io(env: Record<string, string> = { AVIASALES_API_TOKEN: TOKEN }): CliIo
 }
 
 const workingProvider: RunOverrides = {
-  referenceData: { airports, cities: cityRepository },
+  referenceData: { airports, cities: cityRepository, geography: fixtureGeography },
   flightProvider: stubFlightProvider(searchResult([romeTrip])),
 };
 
@@ -98,7 +99,7 @@ describe("run — exit codes", () => {
   it("returns 2 when the provider fails outright", async () => {
     const console_ = io();
     const code = await run(args, console_, {
-      referenceData: { airports, cities: cityRepository },
+      referenceData: { airports, cities: cityRepository, geography: fixtureGeography },
       flightProvider: stubFlightProvider(
         failedResult(
           "fixture-flights",

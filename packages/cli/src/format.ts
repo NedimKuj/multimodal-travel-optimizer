@@ -36,16 +36,41 @@ function formatStopCount(stops: number): string {
   return stops === 1 ? "1 stop" : `${String(stops)} stops`;
 }
 
-function formatLeg(label: string, segment: TransportSegment): string {
+const LEG_LABELS: Readonly<Record<string, string>> = {
+  flight: "fly     ",
+  train: "train   ",
+  bus: "bus     ",
+  ground_transfer: "transfer",
+};
+
+function placeName(location: TransportSegment["origin"]): string {
+  return location.iata ?? location.name;
+}
+
+function formatLeg(segment: TransportSegment): string {
   const departure = localDateTime(segment.departureAt);
   const arrival = localDateTime(segment.arrivalAt);
-  const carrier = segment.carrier ?? "unknown carrier";
-  const service = segment.serviceNumber === undefined ? "" : ` ${segment.serviceNumber}`;
+  const label = LEG_LABELS[segment.mode] ?? segment.mode;
+  const detail =
+    segment.mode === "ground_transfer"
+      ? "estimated"
+      : `${formatStops(segment)} · ${segment.carrier ?? "unknown carrier"}${segment.serviceNumber === undefined ? "" : ` ${segment.serviceNumber}`}`;
   return (
-    `   ${label} ${departure.date} ${departure.time.slice(0, 5)} ${segment.origin.iata ?? segment.origin.id}` +
-    ` → ${arrival.date} ${arrival.time.slice(0, 5)} ${segment.destination.iata ?? segment.destination.id}` +
-    ` · ${formatDuration(segment.durationMinutes)} · ${formatStops(segment)} · ${carrier}${service}`
+    `   ${label} ${departure.date} ${departure.time.slice(0, 5)} ${placeName(segment.origin)}` +
+    ` → ${arrival.date} ${arrival.time.slice(0, 5)} ${placeName(segment.destination)}` +
+    ` · ${formatDuration(segment.durationMinutes)} · ${detail}`
   );
+}
+
+/** "Fare: cached · includes estimated transfer (9.00 EUR)" */
+function formatProvenanceLine(candidate: RankedCandidate): string {
+  const { provenance, cost } = candidate.summary;
+  const fare = provenance.fareSourceType ?? "no retrieved fare";
+  if (!provenance.partiallyEstimated) return `   Fare: ${fare}`;
+  const parts = provenance.estimatedComponents
+    .map((component) => component.replace("_", " "))
+    .join(", ");
+  return `   Fare: ${fare} · includes estimated ${parts} (${formatMoney(cost.estimated)})`;
 }
 
 /** Per-person share, marked approximate when the split is uneven. */
@@ -58,7 +83,10 @@ function formatPerPerson(candidate: RankedCandidate): string {
 }
 
 function formatProvenance(candidate: RankedCandidate): string {
-  const [offer] = candidate.candidate.offers;
+  // The retrieved fare, not a transfer estimate.
+  const offer = candidate.candidate.offers.find(
+    (entry) => entry.provenance.sourceType !== "estimated",
+  );
   if (offer === undefined) return "";
   const fetched = offer.provenance.fetchedAt.slice(0, 16).replace("T", " ");
   const expiry =
@@ -81,21 +109,22 @@ function formatDestination(destination: DestinationResult, index: number): strin
   const lines = [
     `${String(index + 1)}. ${name} — ${airports}`,
     `   ${formatPerPerson(best)} / person · ${formatMoney(best.summary.cost.total)} total · transport only`,
+    formatProvenanceLine(best),
     // Only in-segment stops are shown. `connections` counts changes with no
     // stay in between (ADR 0005), and until accommodation exists every trip
     // has one for its destination stay, which is not a transfer.
-    `   ${String(best.nights)} nights · ${formatDuration(best.summary.travelTimeMinutes)} travelling · ${formatStopCount(best.summary.stops)}`,
+    `   ${String(best.nights)} nights in ${name.split(" (")[0] ?? name} · ${formatDuration(best.summary.travelTimeMinutes)} travelling · ${formatStopCount(best.summary.stops)}`,
   ];
 
-  const [outbound, inbound] = best.candidate.segments;
-  if (outbound !== undefined) lines.push(formatLeg("out ", outbound));
-  if (inbound !== undefined) lines.push(formatLeg("back", inbound));
+  for (const segment of best.candidate.segments) {
+    lines.push(formatLeg(segment));
+  }
 
   const provenance = formatProvenance(best);
   if (provenance !== "") lines.push(provenance);
 
-  const [offer] = best.candidate.offers;
-  if (offer?.bookingUrl !== undefined) lines.push(`   book: ${offer.bookingUrl}`);
+  const bookable = best.candidate.offers.find((entry) => entry.bookingUrl !== undefined);
+  if (bookable?.bookingUrl !== undefined) lines.push(`   book: ${bookable.bookingUrl}`);
   if (rest.length > 0) {
     lines.push(`   (${String(rest.length)} more fare(s) to this destination)`);
   }
@@ -152,6 +181,9 @@ export function formatSearch(trace: SearchTrace, options: FormatOptions): string
     counts.rejectedNights > 0 ? `${String(counts.rejectedNights)} wrong length` : "",
     counts.rejectedBudget > 0 ? `${String(counts.rejectedBudget)} over budget` : "",
     counts.rejectedNotRoundTrip > 0 ? `${String(counts.rejectedNotRoundTrip)} not round trips` : "",
+    counts.rejectedInfeasible > 0
+      ? `${String(counts.rejectedInfeasible)} impossible connections`
+      : "",
     counts.rejectedInvalid > 0 ? `${String(counts.rejectedInvalid)} unusable` : "",
   ].filter((entry) => entry !== "");
   if (rejected.length > 0) lines.push(`Filtered out: ${rejected.join(" · ")}`);
@@ -176,7 +208,7 @@ export function formatSearch(trace: SearchTrace, options: FormatOptions): string
   }
 
   lines.push(
-    "Transport only: accommodation, transfers and extras are not included, and cached fares are not guaranteed bookable.",
+    "Transport only: accommodation and extras are not included. Airport transfers are estimates from a distance model, not quotes, and cached fares are not guaranteed bookable.",
   );
   for (const failure of trace.provider.failures) {
     lines.push(`Provider issue (${failure.kind}): ${failure.message}`);

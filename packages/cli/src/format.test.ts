@@ -6,6 +6,7 @@ import {
 import {
   cityRepository,
   FCO,
+  fixtureGeography,
   metrics,
   request,
   roundTrip,
@@ -45,7 +46,7 @@ async function trace(
 ): Promise<SearchTrace> {
   return runFlightSearch(
     request(overrides),
-    { flightProvider: stubFlightProvider(searchResult(parts)), cities: cityRepository },
+    { flightProvider: stubFlightProvider(searchResult(parts)), cities: cityRepository, geography: fixtureGeography },
     { currency: "EUR", now: fixedClock(), newSearchId: () => "search-1" },
   );
 }
@@ -76,16 +77,24 @@ describe("formatSearch", () => {
 
   it("shows per-person and total cost, labelled transport only", async () => {
     const output = formatSearch(await trace(), { limit: 10 });
-    expect(output).toContain("79.00 EUR / person · 158.00 EUR total · transport only");
-    expect(output).toContain(
-      "Transport only: accommodation, transfers and extras are not included",
-    );
+    // 79.00 fare plus two estimated transfers, per traveler.
+    expect(output).toContain("101.00 EUR / person · 202.00 EUR total · transport only");
+    expect(output).toContain("Fare: cached · includes estimated access transfer (44.00 EUR)");
+    expect(output).toContain("Transport only: accommodation and extras are not included");
+    expect(output).toContain("Airport transfers are estimates from a distance model, not quotes");
   });
 
-  it("shows both legs with local times, stops and carrier", async () => {
+  it("shows every leg with local times, stops and carrier", async () => {
     const output = formatSearch(await trace([romeTrip]), { limit: 10 });
-    expect(output).toContain("out  2026-12-27 10:00 SJJ → 2026-12-27 11:30 FCO · 1h 30m · direct · XX");
-    expect(output).toContain("back 2027-01-02 18:00 FCO → 2027-01-02 19:30 SJJ");
+    expect(output).toContain("fly      2026-12-27 10:00 SJJ → 2026-12-27 11:30 FCO · 1h 30m · direct · XX");
+    expect(output).toContain("fly      2027-01-02 18:00 FCO → 2027-01-02 19:30 SJJ");
+  });
+
+  it("shows the estimated access transfer as its own leg", async () => {
+    const output = formatSearch(await trace([romeTrip]), { limit: 10 });
+    // Fiumicino is 30 km from Rome, so the transfer is explicit.
+    expect(output).toContain("transfer 2026-12-27 12:15 FCO → 2026-12-27 13:11 ROM");
+    expect(output).toContain("· estimated");
   });
 
   it("counts stops on a connecting flight", async () => {
@@ -143,6 +152,7 @@ describe("formatSearch", () => {
           ),
         ),
         cities: cityRepository,
+        geography: fixtureGeography,
       },
       { currency: "EUR", now: fixedClock(), newSearchId: () => "search-2" },
     );
@@ -168,13 +178,13 @@ describe("formatSearch", () => {
     const output = formatSearch(
       await runFlightSearch(
         request({ travelers: 3 }),
-        { flightProvider: stubFlightProvider(searchResult([odd])), cities: cityRepository },
+        { flightProvider: stubFlightProvider(searchResult([odd])), cities: cityRepository, geography: fixtureGeography },
         { currency: "EUR", now: fixedClock(), newSearchId: () => "search-3" },
       ),
       { limit: 10 },
     );
-    // 33.33 x 3 = 99.99, which splits evenly, so no approximation marker.
-    expect(output).toContain("33.33 EUR / person · 99.99 EUR total");
+    // 33.33 fare + two 9.00 transfers, each per traveler: 51.33 x 3 = 153.99.
+    expect(output).toContain("51.33 EUR / person · 153.99 EUR total");
   });
 
   it("names an airport-only destination when no city resolves", async () => {

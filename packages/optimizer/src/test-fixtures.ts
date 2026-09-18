@@ -6,6 +6,7 @@ import {
   transportOfferSchema,
   transportSegmentSchema,
   zonedTimestampFromOffsetIso,
+  type AirportGeography,
   type CityRepository,
   type FlightProvider,
   type FlightSearchQuery,
@@ -56,6 +57,29 @@ export const CIA = location({ code: "CIA", name: "Rome Ciampino", timeZone: "Eur
 export const SAW = location({ code: "SAW", name: "Istanbul Sabiha", timeZone: "Europe/Istanbul", countryCode: "TR" });
 export const ROME = location({ code: "ROM", name: "Rome", timeZone: "Europe/Rome", countryCode: "IT", type: "city" });
 export const ISTANBUL = location({ code: "IST", name: "Istanbul", timeZone: "Europe/Istanbul", countryCode: "TR", type: "city" });
+
+/**
+ * Distances used by the fixture geography, in kilometres. Roughly real:
+ * Fiumicino and Sabiha Gokcen need an access transfer, Ciampino does not.
+ */
+export const FIXTURE_DISTANCES_KM: Record<string, number> = {
+  [`${FCO.id}->${ROME.id}`]: 30,
+  [`${CIA.id}->${ROME.id}`]: 15,
+  [`${SAW.id}->${ISTANBUL.id}`]: 40,
+};
+
+export const fixtureGeography: AirportGeography = {
+  provenance: {
+    source: "test-fixture",
+    fetchedAt: parseUtcInstant("2026-09-18T08:00:00Z"),
+    recordCount: 4,
+  },
+  distanceBetween: (from, to) =>
+    FIXTURE_DISTANCES_KM[`${from.id}->${to.id}`] ??
+    FIXTURE_DISTANCES_KM[`${to.id}->${from.id}`] ??
+    Number.POSITIVE_INFINITY,
+  findNearby: () => [],
+};
 
 export const cityRepository: CityRepository = {
   provenance: {
