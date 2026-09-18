@@ -102,7 +102,13 @@ Transport modes initially supported:
 flight
 train
 bus
+ground_transfer
 ```
+
+`ground_transfer` covers airport/station access and transfers between nodes. It
+is a segment like any other so that it occupies time and is validated as part
+of the itinerary; no provider prices it today, so its cost is estimated and
+labelled `estimated` (`docs/decisions/0011-ground-transfers.md`).
 
 Transport is modeled as two separate concepts (see
 `docs/decisions/0002-separate-transport-offers-from-segments.md`):
@@ -115,7 +121,7 @@ A normalized transport segment contains at minimum:
 ```ts
 interface TransportSegment {
   id: string
-  mode: "flight" | "train" | "bus"
+  mode: "flight" | "train" | "bus" | "ground_transfer"
 
   origin: Location
   destination: Location
