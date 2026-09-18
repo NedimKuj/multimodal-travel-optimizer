@@ -52,6 +52,34 @@ export interface CityRepository {
   findForAirport(airport: Location): Location | undefined;
 }
 
+export interface NearbyAirport {
+  readonly airport: Location;
+  /** Great-circle distance from the point searched around, in kilometres. */
+  readonly distanceKm: number;
+}
+
+/**
+ * Spatial queries over the airport reference data.
+ *
+ * Kept separate from `AirportRepository` because it answers a different
+ * question — "what else is near here?" — and because proximity alone never
+ * makes two airports interchangeable: the transfer between them is part of the
+ * itinerary (docs/decisions/0013-alternative-origin-expansion.md).
+ */
+export interface AirportGeography {
+  readonly provenance: ReferenceDataProvenance;
+  /**
+   * Airports within `radiusKm` of `center`, excluding `center` itself.
+   *
+   * Ordered nearest first, then by IATA code, so a search built on this is
+   * reproducible. Implementations return only airports that can actually be
+   * flown from.
+   */
+  findNearby(center: Location, radiusKm: number): readonly NearbyAirport[];
+  /** Great-circle distance between two locations, in kilometres. */
+  distanceBetween(from: Location, to: Location): number;
+}
+
 export type AirportLookup =
   | { readonly ok: true; readonly airport: Location }
   | { readonly ok: false; readonly issue: ReferenceDataIssue };

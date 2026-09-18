@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { inMemoryAirportGeography } from "../test-fixtures/airport-geography.js";
 import {
   inMemoryAirportRepository,
   inMemoryCityRepository,
@@ -72,5 +73,35 @@ describe("lookupCityForAirport", () => {
   it("looks a city up by its own code", () => {
     expect(cities.findByCode("vienna")).toEqual(VIENNA);
     expect(cities.findByCode("nowhere")).toBeUndefined();
+  });
+});
+
+describe("AirportGeography (fixture behaviour the port promises)", () => {
+  const geography = inMemoryAirportGeography(
+    { [SJJ.id]: { [VIE.id]: 300, [PRG.id]: 800 } },
+    { [SJJ.id]: SJJ, [VIE.id]: VIE, [PRG.id]: PRG },
+  );
+
+  it("returns airports inside the radius, nearest first", () => {
+    expect(geography.findNearby(SJJ, 1000).map((entry) => entry.airport.iata)).toEqual([
+      "VIE",
+      "PRG",
+    ]);
+  });
+
+  it("excludes the point searched around", () => {
+    expect(geography.findNearby(SJJ, 1000).some((entry) => entry.airport.id === SJJ.id)).toBe(
+      false,
+    );
+  });
+
+  it("treats the radius as inclusive", () => {
+    expect(geography.findNearby(SJJ, 300).map((entry) => entry.airport.iata)).toEqual(["VIE"]);
+    expect(geography.findNearby(SJJ, 299)).toEqual([]);
+  });
+
+  it("reports distance symmetrically", () => {
+    expect(geography.distanceBetween(VIE, SJJ)).toBe(300);
+    expect(geography.distanceBetween(SJJ, VIE)).toBe(300);
   });
 });
