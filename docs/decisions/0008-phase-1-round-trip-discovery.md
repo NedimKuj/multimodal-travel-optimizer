@@ -40,6 +40,19 @@ One-way composition is deferred to the open-jaw/optimization phase, where it is
 required anyway (`SJJ→A`, `B→SJJ` cannot be one fare) and where it can be
 introduced together with an explicit caching strategy.
 
+## Query shape
+
+Round-trip queries **do not** set `unique=true`. That flag returns one record
+per destination, which is breadth for one-way discovery (48 destinations vs 7)
+but the opposite for round trips: one record per destination means one date
+pair per destination, and most pairs fall outside any specific travel window.
+Measured on 2026-09-18 for SJJ over 24 Dec – 5 Jan: 5 in-window fares without
+it, 2 with.
+
+The adapter still sets it for one-way "anywhere" searches, but **no Phase 1
+code path reaches that branch**, because Phase 1 always supplies return dates.
+It becomes live when one-way composition arrives.
+
 ## Consequences
 
 - Phase 1 coverage is bounded by round-trip availability from the origin. That

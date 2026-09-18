@@ -1,6 +1,12 @@
 import { resolve } from "node:path";
 
-import { normalizeSearchRequest, type DomainIssue } from "@travel-optimizer/domain";
+import {
+  normalizeSearchRequest,
+  type AirportRepository,
+  type CityRepository,
+  type DomainIssue,
+  type FlightProvider,
+} from "@travel-optimizer/domain";
 import { loadReferenceData, SnapshotUnavailableError } from "@travel-optimizer/geo";
 import { runFlightSearch } from "@travel-optimizer/optimizer";
 import {
@@ -26,6 +32,18 @@ export interface CliIo {
   readonly stderr: (text: string) => void;
   readonly env: Readonly<Partial<Record<string, string>>>;
   readonly cwd: string;
+}
+
+/**
+ * Seams for tests: supplying either skips loading snapshots from disk or
+ * talking to a real provider. Production passes neither.
+ */
+export interface RunOverrides {
+  readonly referenceData?: {
+    readonly airports: AirportRepository;
+    readonly cities: CityRepository;
+  };
+  readonly flightProvider?: FlightProvider;
 }
 
 function reportIssues(io: CliIo, heading: string, issues: readonly DomainIssue[]): void {
@@ -61,7 +79,11 @@ function toSearchRequestInput(options: CliOptions): Record<string, unknown> {
  * 0 success (including "nothing matched"), 1 usage or configuration problem,
  * 2 the provider failed outright.
  */
-export async function run(argv: readonly string[], io: CliIo): Promise<number> {
+export async function run(
+  argv: readonly string[],
+  io: CliIo,
+  overrides: RunOverrides = {},
+): Promise<number> {
   const parsed = parseArguments(argv);
   if (!parsed.ok) {
     if ("help" in parsed) {
@@ -94,29 +116,34 @@ export async function run(argv: readonly string[], io: CliIo): Promise<number> {
     return 1;
   }
 
-  let referenceData;
-  try {
-    referenceData = await loadReferenceData();
-  } catch (error) {
-    if (error instanceof SnapshotUnavailableError) {
-      io.stderr(`${error.message}\n`);
-    } else {
-      io.stderr(
-        `Could not load reference data: ${error instanceof Error ? error.message : String(error)}\n`,
-      );
+  let referenceData = overrides.referenceData;
+  if (referenceData === undefined) {
+    try {
+      const loaded = await loadReferenceData();
+      referenceData = { airports: loaded.airports.repository, cities: loaded.cities.repository };
+    } catch (error) {
+      if (error instanceof SnapshotUnavailableError) {
+        io.stderr(`${error.message}\n`);
+      } else {
+        io.stderr(
+          `Could not load reference data: ${error instanceof Error ? error.message : String(error)}\n`,
+        );
+      }
+      return 1;
     }
-    return 1;
   }
 
-  const provider = createAviasalesFlightProvider({
-    config: configResult.config,
-    airports: referenceData.airports.repository,
-    cache: createFileResponseCache(resolve(io.cwd, CACHE_DIRECTORY), CACHE_TTL_MS),
-  });
+  const provider =
+    overrides.flightProvider ??
+    createAviasalesFlightProvider({
+      config: configResult.config,
+      airports: referenceData.airports,
+      cache: createFileResponseCache(resolve(io.cwd, CACHE_DIRECTORY), CACHE_TTL_MS),
+    });
 
   const trace = await runFlightSearch(
     normalized.request,
-    { flightProvider: provider, cities: referenceData.cities.repository },
+    { flightProvider: provider, cities: referenceData.cities },
     { currency: options.currency },
   );
 
