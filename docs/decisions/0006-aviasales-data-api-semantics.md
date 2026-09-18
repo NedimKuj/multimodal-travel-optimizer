@@ -16,9 +16,13 @@ mislabelling it, so they are fixed here rather than left to the adapter.
 
 v3 `prices_for_dates` records carry no `expires_at` and no observation
 timestamp. Every offer from this adapter is `sourceType: "cached"`, with
-`fetchedAt` set to our request time and **no `expiresAt`**, so freshness reads as
-`unknown` rather than fresh. No price from this provider may be presented as
-live or bookable; that requires the separate verification stage.
+`fetchedAt` set to our request time and **no `expiresAt`**.
+
+An absent `expiresAt` means **the provider supplied no expiry, so freshness is
+unknown**. It must never be read as "this price does not expire": these are
+cached fares that can go stale at any moment. `priceFreshness` reports
+`unknown` for them, and no price from this provider may be presented as live or
+bookable; that requires the separate verification stage.
 
 ### 2. One record with `return_at` is one offer over two segments
 
@@ -48,13 +52,17 @@ when booking links are verified, and it is listed in
 Segments are built from the airport fields, resolved through the
 `AirportRepository` (ADR 0007). An unresolvable code drops the record.
 
-### 6. A stale offset drops the record
+### 6. A provider offset conflicting with the airport's zone drops the record
 
 `departure_at` is local at the origin airport and `return_at` is local at the
-destination. Both are validated against the airport's IANA zone. One record in
-415 disagreed (`CIT` at `+06:00` where `Asia/Almaty` is UTC+5). Where provider
-offset and zone data conflict, the record is dropped and counted: silently
-preferring one would corrupt connection validation.
+destination. Both are validated against the airport's IANA zone in the
+reference data. One record in 415 conflicted (`CIT` at `+06:00`, where
+`Asia/Almaty` resolves to UTC+5 at that instant).
+
+We do not determine which source is correct. Where the provider-supplied offset
+and the authoritative airport time zone disagree, the record is **rejected and
+counted**, because silently preferring either one would corrupt connection
+validation.
 
 ### 7. Discovery is month-granular, with `unique=true`
 

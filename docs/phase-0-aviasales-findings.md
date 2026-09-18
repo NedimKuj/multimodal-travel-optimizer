@@ -60,12 +60,15 @@ exactly the case ADR 0002 separates: it becomes one `TransportOffer` over two
 
 ### What is missing
 
-- **No arrival times.** Arrival must be derived: `departure_at + duration_to`,
-  and for the return `return_at + duration_back`. Derived, not fabricated — but
-  it is an inference, so it is recorded as such in ADR 0006.
-- **No `expires_at`** on v3 records, and no observation timestamp. Freshness is
-  therefore **unknown** for these prices: `fetchedAt` is our own request time
-  and `expiresAt` stays empty.
+- **No arrival times.** Arrival is **derived**, never presented as
+  provider-reported: the absolute departure instant plus the elapsed duration
+  (`duration_to`, and `duration_back` for the return), resolved in the
+  destination airport's time zone. It is an inference, recorded as such in
+  ADR 0006.
+- **No `expires_at`** on v3 records, and no observation timestamp. `fetchedAt`
+  is our own request time and `expiresAt` stays unset, which means **the
+  provider supplied no expiry, so freshness is unknown** — not that the price
+  never expires.
 - **No passenger parameter**, so the price cannot be for a party. The generated
   search links end in a passenger count of 1 (`/search/SJJ3012IST08011`), which
   is strong but not contractual evidence that the price is per adult passenger.
@@ -119,14 +122,16 @@ unknown origin airport:       0
 unknown destination airport:  0
 non-integer price:            0
 missing duration:             0
-offset disagrees with zone:   1
+offset conflicts with zone:   1
 ```
 
-The single failure is real, not a bug in our validation: `CIT` (Shymkent) was
-returned as `2027-01-10T22:25:00+06:00`, but Kazakhstan's zone `Asia/Almaty` is
-UTC+5 at that instant. The provider's offset is stale. Such records are dropped
-as a data-quality failure rather than silently re-interpreted, because guessing
-which of the two is right would corrupt connection validation.
+The single conflict is a genuine data disagreement, not a bug in our
+validation: `CIT` (Shymkent) was returned as `2027-01-10T22:25:00+06:00`, while
+`Asia/Almaty` in the reference data resolves to UTC+5 at that instant.
+
+We do not adjudicate which source is right. Such records are rejected as a
+data-quality failure and counted, rather than silently re-interpreted, because
+picking either side would corrupt connection validation.
 
 ## 6. Other endpoints worth keeping in mind
 
