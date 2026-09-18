@@ -13,6 +13,9 @@ export default defineConfig({
     // Tests run against workspace sources, not built dist output.
     alias: {
       "@travel-optimizer/cli": packageSource("cli"),
+      "@travel-optimizer/domain/test-fixtures": fileURLToPath(
+        new URL("packages/domain/src/test-fixtures/index.ts", import.meta.url),
+      ),
       "@travel-optimizer/domain": packageSource("domain"),
       "@travel-optimizer/geo": packageSource("geo"),
       "@travel-optimizer/optimizer/test-fixtures": fileURLToPath(

@@ -45,6 +45,11 @@ function location(input: {
   });
 }
 
+/** A minimal airport fixture; coordinates are placeholders. */
+export function airport(code: string, name: string, timeZone = "Europe/Sarajevo"): Location {
+  return location({ code, name, timeZone, countryCode: "BA" });
+}
+
 export const SJJ = location({ code: "SJJ", name: "Sarajevo", timeZone: "Europe/Sarajevo", countryCode: "BA" });
 export const FCO = location({ code: "FCO", name: "Rome Fiumicino", timeZone: "Europe/Rome", countryCode: "IT" });
 export const CIA = location({ code: "CIA", name: "Rome Ciampino", timeZone: "Europe/Rome", countryCode: "IT" });
