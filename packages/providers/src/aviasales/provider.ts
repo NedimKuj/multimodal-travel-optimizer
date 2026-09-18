@@ -88,12 +88,17 @@ function buildSearchUrl(
   if (shape.destination !== undefined) url.searchParams.set("destination", shape.destination);
   url.searchParams.set("departure_at", shape.month);
   if (shape.returnMonth !== undefined) url.searchParams.set("return_at", shape.returnMonth);
-  url.searchParams.set("one_way", String(query.returnDates === undefined));
+  const oneWay = query.returnDates === undefined;
+  url.searchParams.set("one_way", String(oneWay));
   url.searchParams.set("currency", query.currency.toLowerCase());
   url.searchParams.set("limit", "1000");
   url.searchParams.set("sorting", "price");
-  // Breadth comes from unique=true: 48 destinations vs 7 without it.
-  if (shape.destination === undefined) url.searchParams.set("unique", "true");
+  // `unique=true` returns one record per destination. For one-way discovery
+  // that is breadth (48 destinations vs 7). For round trips it is the
+  // opposite: one record per destination means one date pair per destination,
+  // and most of those pairs fall outside any specific travel window, so it is
+  // left off (measured 2026-09-18: 5 in-window fares without it, 2 with).
+  if (shape.destination === undefined && oneWay) url.searchParams.set("unique", "true");
   return url.toString();
 }
 

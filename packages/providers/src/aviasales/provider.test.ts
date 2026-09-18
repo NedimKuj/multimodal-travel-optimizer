@@ -88,6 +88,7 @@ describe("AviasalesFlightProvider", () => {
     expect(urls[0]).toContain("unique=true");
     expect(urls[0]).toContain("one_way=true");
     expect(urls[0]).not.toContain("secret-token");
+    expect(urls[0]).not.toContain("secret-token");
     expect(result.status).toBe("ok");
   });
 
@@ -142,6 +143,24 @@ describe("AviasalesFlightProvider", () => {
     });
     if (outOfWindow.status === "failed") throw new Error("expected data");
     expect(outOfWindow.data.offers).toHaveLength(0);
+  });
+
+  it("does not ask for unique destinations on a round-trip search", async () => {
+    // One record per destination means one date pair per destination, which
+    // mostly falls outside a specific travel window.
+    const urls: string[] = [];
+    const provider = createAviasalesFlightProvider({
+      config: config(),
+      airports,
+      fetchImpl: stubFetch(pricesForDatesBody([]), urls),
+    });
+    await provider.search({
+      ...december,
+      departureDates: { from: parseLocalDate("2026-12-26"), to: parseLocalDate("2026-12-31") },
+      returnDates: { from: parseLocalDate("2027-01-01"), to: parseLocalDate("2027-01-05") },
+    });
+    expect(urls[0]).toContain("one_way=false");
+    expect(urls[0]).not.toContain("unique");
   });
 
   it("queries every month a return window touches", async () => {
