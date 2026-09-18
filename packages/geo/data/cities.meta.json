@@ -1,0 +1,7 @@
+{
+  "source": "https://api.travelpayouts.com/data/en-GB/cities.json",
+  "fetchedAt": "2026-09-18T09:46:22.724Z",
+  "recordCount": 9521,
+  "checksumSha256": "642ef220d14d454187275418a384ff284c3f2b54696f1c0868b276ea4f69d474",
+  "termsStatus": "Redistribution terms unverified as of 2026-09-18; snapshot not committed. See docs/provider-compliance.md."
+}

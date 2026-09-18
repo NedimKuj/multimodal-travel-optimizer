@@ -15,7 +15,7 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "tsc -p tsconfig.build.json",
-    "fetch:airports": "node dist/bin/fetch-airports.js"
+    "fetch:reference-data": "node dist/bin/fetch-reference-data.js"
   },
   "dependencies": {
     "@travel-optimizer/domain": "workspace:*",
