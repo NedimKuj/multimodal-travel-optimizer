@@ -144,6 +144,41 @@ describe("AviasalesFlightProvider", () => {
     expect(outOfWindow.data.offers).toHaveLength(0);
   });
 
+  it("queries every month a return window touches", async () => {
+    const urls: string[] = [];
+    const provider = createAviasalesFlightProvider({
+      config: config(),
+      airports,
+      fetchImpl: stubFetch(pricesForDatesBody([]), urls),
+    });
+    await provider.search({
+      ...december,
+      departureDates: { from: parseLocalDate("2026-12-26"), to: parseLocalDate("2026-12-31") },
+      // Crosses a month boundary: January returns must not be dropped.
+      returnDates: { from: parseLocalDate("2026-12-30"), to: parseLocalDate("2027-01-04") },
+    });
+    expect(urls).toHaveLength(2);
+    expect(urls.some((url) => url.includes("return_at=2026-12"))).toBe(true);
+    expect(urls.some((url) => url.includes("return_at=2027-01"))).toBe(true);
+  });
+
+  it("skips return months that precede the outbound month", async () => {
+    const urls: string[] = [];
+    const provider = createAviasalesFlightProvider({
+      config: config(),
+      airports,
+      fetchImpl: stubFetch(pricesForDatesBody([]), urls),
+    });
+    await provider.search({
+      ...december,
+      departureDates: { from: parseLocalDate("2026-12-26"), to: parseLocalDate("2027-01-02") },
+      returnDates: { from: parseLocalDate("2027-01-01"), to: parseLocalDate("2027-01-05") },
+    });
+    // Dec→Jan and Jan→Jan, but never Jan→Dec.
+    expect(urls).toHaveLength(2);
+    expect(urls.every((url) => url.includes("return_at=2027-01"))).toBe(true);
+  });
+
   it("reports dropped records instead of hiding them", async () => {
     const unknownAirport = { ...ONE_WAY_RECORD, destination_airport: "ZZZ" };
     const provider = createAviasalesFlightProvider({

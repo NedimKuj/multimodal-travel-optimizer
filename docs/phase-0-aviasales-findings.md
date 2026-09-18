@@ -142,7 +142,20 @@ which of the two is right would corrupt connection validation.
 - **`v3/grouped_prices`** — same record shape as `prices_for_dates`, grouped by
   date; a cheap way to see a month at a glance.
 
-## 7. Verdict
+## 7. Not established by this probe
+
+Two things the adapter depends on that the probe did **not** test:
+
+- **Only `currency=eur` was ever requested.** Whether the API honours other
+  currencies is unknown. The adapter refuses a response whose currency differs
+  from the request (rather than mislabelling money), so if the API silently
+  answers in EUR for a `bam` request, that search fails outright. Worth probing
+  before any non-EUR search is offered.
+- **A query carries one departure month and one return month.** A return window
+  spanning two months therefore needs one call per month pair; the adapter plans
+  them and drops impossible pairs (return before departure).
+
+## 8. Verdict
 
 The Data API **is** a usable discovery layer for cached fares, with three firm
 limits: coverage is tens of destinations rather than hundreds, useful queries

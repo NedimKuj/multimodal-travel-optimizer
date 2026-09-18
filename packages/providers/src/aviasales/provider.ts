@@ -64,35 +64,60 @@ export function monthsInRange(range: LocalDateRange): string[] {
     const [year = "", month = ""] = cursor.split("-");
     const next = Number(month) === 12 ? `${String(Number(year) + 1)}-01` : `${year}-${String(Number(month) + 1).padStart(2, "0")}`;
     cursor = next;
+    // Safety stop for an absurd range. Any range this long blows the call
+    // budget below, so a truncated list can never reach a result.
     if (months.length > 24) break;
   }
   return months;
 }
 
-function planCalls(config: AviasalesConfig, query: FlightSearchQuery): PlannedCall[] {
-  const months = monthsInRange(query.departureDates);
-  const oneWay = query.returnDates === undefined;
-  const destinations = query.destinations === "anywhere" ? [undefined] : query.destinations;
-  const calls: PlannedCall[] = [];
+interface CallShape {
+  readonly origin: string;
+  readonly destination: string | undefined;
+  readonly month: string;
+  readonly returnMonth: string | undefined;
+}
 
+function buildSearchUrl(
+  config: AviasalesConfig,
+  query: FlightSearchQuery,
+  shape: CallShape,
+): string {
+  const url = new URL("/aviasales/v3/prices_for_dates", config.baseUrl);
+  url.searchParams.set("origin", shape.origin);
+  if (shape.destination !== undefined) url.searchParams.set("destination", shape.destination);
+  url.searchParams.set("departure_at", shape.month);
+  if (shape.returnMonth !== undefined) url.searchParams.set("return_at", shape.returnMonth);
+  url.searchParams.set("one_way", String(query.returnDates === undefined));
+  url.searchParams.set("currency", query.currency.toLowerCase());
+  url.searchParams.set("limit", "1000");
+  url.searchParams.set("sorting", "price");
+  // Breadth comes from unique=true: 48 destinations vs 7 without it.
+  if (shape.destination === undefined) url.searchParams.set("unique", "true");
+  return url.toString();
+}
+
+function planCalls(config: AviasalesConfig, query: FlightSearchQuery): PlannedCall[] {
+  const departureMonths = monthsInRange(query.departureDates);
+  // A query carries one departure month and one return month, so a return
+  // window spanning two months needs one call per pair. Querying only the
+  // first month would silently drop the rest of the user's return window.
+  const returnMonths =
+    query.returnDates === undefined ? [undefined] : monthsInRange(query.returnDates);
+  const destinations = query.destinations === "anywhere" ? [undefined] : query.destinations;
+
+  const calls: PlannedCall[] = [];
   for (const origin of query.origins) {
     for (const destination of destinations) {
-      for (const month of months) {
-        const url = new URL("/aviasales/v3/prices_for_dates", config.baseUrl);
-        url.searchParams.set("origin", origin);
-        if (destination !== undefined) url.searchParams.set("destination", destination);
-        url.searchParams.set("departure_at", month);
-        if (query.returnDates !== undefined) {
-          // The API takes a single return month alongside the departure month.
-          url.searchParams.set("return_at", query.returnDates.from.slice(0, 7));
+      for (const month of departureMonths) {
+        for (const returnMonth of returnMonths) {
+          // A return before the outbound month is not a trip.
+          if (returnMonth !== undefined && returnMonth < month) continue;
+          calls.push({
+            url: buildSearchUrl(config, query, { origin, destination, month, returnMonth }),
+            month,
+          });
         }
-        url.searchParams.set("one_way", String(oneWay));
-        url.searchParams.set("currency", query.currency.toLowerCase());
-        url.searchParams.set("limit", "1000");
-        url.searchParams.set("sorting", "price");
-        // Breadth comes from unique=true: 48 destinations vs 7 without it.
-        if (destination === undefined) url.searchParams.set("unique", "true");
-        calls.push({ url: url.toString(), month });
       }
     }
   }
