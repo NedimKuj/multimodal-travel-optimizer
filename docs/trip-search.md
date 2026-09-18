@@ -3,8 +3,9 @@
 Runs a real search from the command line, so the optimizer can be exercised
 without a UI (`docs/implementation-plan.md` §51).
 
-It searches **flights**, plus the ground transfers needed to reach them: no
-accommodation, no trains or buses, no open jaw or multi-city. Fares are
+It searches **flights**, plus the ground transfers needed to reach them, and
+with `--open-jaw` composes itineraries that fly home from another city. No
+accommodation, no trains or buses, no multi-city (that is Phase 3b). Fares are
 **cached** and not guaranteed bookable; transfer costs are **estimates from a
 distance model**, never quotes.
 
@@ -36,6 +37,24 @@ return dates, each with `±flex` tolerance.
 
 `--budget` is **per person by default**; pass `--budget-basis total` for a whole
 trip budget. The CLI prints back which one it used.
+
+`--open-jaw` allows flying home from a different city. It switches discovery to
+**one-way fares**, which reach far more destinations (51 against 15, measured
+2026-09-18) and are the only way to build an open jaw. The sector between the
+two cities is **not priced** — no licensed rail or bus source exists
+(`docs/provider-compliance.md`) — so it is shown as a gap, excluded from the
+amount, and the output says so:
+
+```text
+1. Dalaman → Ankara (open jaw) — DLM, ESB
+   Known cost: 147.00 EUR / person · 294.00 EUR · transport only
+   DLM → ESB: 526 km, UNPRICED — arrange separately
+   The amount above EXCLUDES DLM → ESB
+```
+
+A **known cost** is not a total. Itineraries with a gap are ranked in their own
+class, always below fully priced ones, so a trip never looks cheap because of
+the sector it leaves out (ADR 0014).
 
 `--alternative-airports` also searches nearby origin airports (off by default).
 Each one costs provider calls against the search budget, so the CLI prints which
@@ -80,6 +99,28 @@ Candidates: 5 across 3 destination(s)
 
 Exit codes: `0` success (including no matches), `1` usage or configuration
 problem, `2` the provider failed outright.
+
+## How a search spends its calls
+
+With `--open-jaw`, the search runs a two-stage funnel inside a hard budget of
+**12 provider calls**:
+
+```text
+Stage 1   one call per departure month: origin → anywhere, one-way
+Stage 2   a return-leg query per destination, cheapest outbound fare first,
+          while budget remains
+```
+
+The output says how many destinations were checked for a way home, how many
+had one, and how many were never checked because the budget ran out. Return
+legs are genuinely sparse — many destinations have no retrieved way back — so
+that line is usually the explanation for a short result.
+
+Alternative origins draw on the **same** budget: three origins over a two-month
+window spend 6 calls before any return leg is queried.
+
+The 12 is an application-level safety limit of our own, not the provider's
+quota, which remains unverified (`docs/provider-compliance.md`).
 
 ## Caching
 
