@@ -300,6 +300,30 @@ December 26 → January 3
 
 the optimizer may evaluate dates within the permitted flexibility window.
 
+The window's meaning depends on whether a nights range is given
+(`docs/decisions/0009-date-flexibility-semantics.md`):
+
+**With a nights range — travel window plus duration.** The dates bound the
+period the traveler could be away:
+
+```text
+window = [departureDate - flexibilityDays, returnDate + flexibilityDays]
+valid:   departs on or after window.from
+         returns on or before window.to
+         nights within [minNights, maxNights]
+```
+
+**Without a nights range — anchored dates.** Each date carries its own
+tolerance:
+
+```text
+departure ∈ [departureDate ± flexibilityDays]
+return    ∈ [returnDate    ± flexibilityDays]
+```
+
+A window that cannot contain `minNights` is an explicit issue on the request,
+not a search that silently returns nothing.
+
 It must not silently expand beyond the user's requested range.
 
 If a result is outside the requested date constraints, it must not be presented as a normal valid result.
@@ -480,6 +504,21 @@ Candidate generation should use a funnel:
 ```
 
 The exact implementation may evolve, but expensive provider calls should happen as late as reasonably possible.
+
+### Phase 1 subset
+
+Phase 1 implements steps 1, 2 and 10 only, using provider round-trip fares
+(`docs/decisions/0008-phase-1-round-trip-discovery.md`). Steps 3–6 and 9 arrive
+with ground transport, open-jaw and accommodation; step 8 with pruning.
+
+Provider calls are planned at **month granularity** and results are filtered to
+the user's actual dates locally, because exact-date queries return almost
+nothing from this source (`docs/phase-0-aviasales-findings.md` §3). The number
+of calls per search is bounded, and a query that would exceed the budget is
+refused rather than truncated.
+
+Destinations are reported as cities while candidates keep their airports
+(`docs/decisions/0010-city-destinations.md`).
 
 ---
 

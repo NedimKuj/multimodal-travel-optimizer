@@ -2000,6 +2000,23 @@ with:
 
 No hotels yet.
 
+Delivered as the `trip-search` CLI (§51), not a UI.
+
+Strategy, from the Phase 0 measurements
+(`docs/phase-0-aviasales-findings.md`):
+
+- discovery uses provider **round-trip fares only**; composing two one-way
+  fares is deferred to the open-jaw phase
+  (`docs/decisions/0008-phase-1-round-trip-discovery.md`)
+- provider calls are planned at **month granularity**, then results are
+  filtered locally to the user's actual dates
+- `--from`/`--to` with `--nights` bound a travel window; without `--nights`
+  they are anchored dates (`docs/decisions/0009-date-flexibility-semantics.md`)
+- destinations are reported as **cities**, while each candidate keeps its
+  airport identity (`docs/decisions/0010-city-destinations.md`)
+- costs are transport-only and labelled as such; they are not complete-trip
+  costs until accommodation exists (Phase 4)
+
 ---
 
 ## Phase 2 — Graph
@@ -2188,6 +2205,27 @@ Final candidates:
 ```
 
 **Only after this works should the UI be built.**
+
+The Phase 1 CLI produces the transport part of this output: destinations with
+price, dates, duration, stops and airline. Accommodation counts, open-jaw and
+pruning lines appear in the phases that implement them, rather than being
+printed as zeros.
+
+Phase 1 flags:
+
+```bash
+pnpm trip-search \
+  --origin SJJ \
+  --from 2026-12-26 \
+  --to 2027-01-03 \
+  --nights 5:7 \
+  --flex 2 \
+  --budget 700 \
+  --budget-basis per-person \
+  --people 2 \
+  --currency EUR \
+  [--destination IST] [--limit 10] [--json]
+```
 
 ---
 
