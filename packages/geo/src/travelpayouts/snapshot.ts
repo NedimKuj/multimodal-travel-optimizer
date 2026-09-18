@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { parseUtcInstant, type ReferenceDataProvenance } from "@travel-optimizer/domain";
 import { z } from "zod";
 
+import { buildAirportGeography, type AirportGeographyBuild } from "./airport-geography.js";
 import { buildAirportRepository, type AirportRepositoryBuild } from "./airports.js";
 import { buildCityRepository, type CityRepositoryBuild } from "./cities.js";
 
@@ -50,9 +51,7 @@ export function sha256(contents: string): string {
 
 export class SnapshotUnavailableError extends Error {
   constructor(path: string, cause: unknown) {
-    super(
-      `No airport snapshot at ${path}. Run "pnpm --filter @travel-optimizer/geo fetch:airports" first.`,
-    );
+    super(`No reference data snapshot at ${path}. Run "pnpm geo:fetch" first.`);
     this.name = "SnapshotUnavailableError";
     this.cause = cause;
   }
@@ -130,6 +129,7 @@ async function readVerifiedSnapshot(
 
 export interface LoadedReferenceData {
   readonly airports: AirportRepositoryBuild;
+  readonly geography: AirportGeographyBuild;
   readonly cities: CityRepositoryBuild;
   readonly airportsMetadata: SnapshotMetadata;
   readonly citiesMetadata: SnapshotMetadata;
@@ -164,6 +164,7 @@ export async function loadReferenceData(paths?: {
 
   return {
     airports: buildAirportRepository(airportSnapshot.records, provenanceOf(airportSnapshot)),
+    geography: buildAirportGeography(airportSnapshot.records, provenanceOf(airportSnapshot)),
     cities: buildCityRepository(
       { cities: citySnapshot.records, airports: airportSnapshot.records },
       provenanceOf(citySnapshot),
