@@ -2000,7 +2000,8 @@ with:
 
 No hotels yet.
 
-Delivered as the `trip-search` CLI (§51), not a UI.
+Delivered as the `trip-search` CLI (§51), not a UI. Usage and measured
+coverage: `docs/trip-search.md`.
 
 Strategy, from the Phase 0 measurements
 (`docs/phase-0-aviasales-findings.md`):
