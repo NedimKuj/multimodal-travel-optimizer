@@ -70,7 +70,8 @@ function toSearchRequestInput(options: CliOptions): Record<string, unknown> {
     ...(options.budget !== undefined && { budget: options.budget }),
     // Phase 1 is flights only; other modes arrive with the transport graph.
     transportModes: ["flight"],
-    allowOpenJaw: false,
+    allowOpenJaw: options.openJaw,
+    // Multi-city is Phase 3b.
     allowMultiCity: false,
     alternativeAirports: options.alternativeAirports,
   };

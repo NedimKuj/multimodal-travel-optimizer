@@ -101,19 +101,36 @@ function formatDestination(destination: DestinationResult, index: number): strin
   if (best === undefined) return [];
 
   const airports = destination.airports.map((airport) => airport.iata ?? airport.id).join(", ");
+  const openJaw = best.summary.unpricedGaps.length > 0;
+  const cityNames = destination.cities.map((city) => city.name);
   const name =
-    destination.city === undefined
+    cityNames.length === 0
       ? `${destination.airports[0]?.name ?? "Unknown"} (airport only)`
-      : `${destination.city.name} (${destination.city.countryCode})`;
+      : cityNames.length > 1
+        ? `${cityNames.join(" → ")}${openJaw ? " (open jaw)" : ""}`
+        : `${cityNames[0] ?? ""} (${destination.cities[0]?.countryCode ?? ""})`;
 
   const lines = [
     `${String(index + 1)}. ${name} — ${airports}`,
-    `   ${formatPerPerson(best)} / person · ${formatMoney(best.summary.cost.total)} total · transport only`,
+    openJaw
+      ? `   Known cost: ${formatPerPerson(best)} / person · ${formatMoney(best.summary.cost.total)} · transport only`
+      : `   ${formatPerPerson(best)} / person · ${formatMoney(best.summary.cost.total)} total · transport only`,
+    ...best.summary.unpricedGaps.map(
+      (gap) =>
+        `   ${gap.from.iata ?? gap.from.name} → ${gap.to.iata ?? gap.to.name}: ${gap.distanceKm === undefined ? "distance unknown" : `${String(Math.round(gap.distanceKm))} km`}, UNPRICED — arrange separately`,
+    ),
+    ...(openJaw
+      ? [
+          `   The amount above EXCLUDES ${best.summary.unpricedGaps
+            .map((gap) => `${gap.from.iata ?? gap.from.name} → ${gap.to.iata ?? gap.to.name}`)
+            .join(", ")}`,
+        ]
+      : []),
     formatProvenanceLine(best),
     // Only in-segment stops are shown. `connections` counts changes with no
     // stay in between (ADR 0005), and until accommodation exists every trip
     // has one for its destination stay, which is not a transfer.
-    `   ${String(best.nights)} nights in ${name.split(" (")[0] ?? name} · ${formatDuration(best.summary.travelTimeMinutes)} travelling · ${formatStopCount(best.summary.stops)}`,
+    `   ${String(best.nights)} nights · ${formatDuration(best.summary.travelTimeMinutes)} travelling · ${formatStopCount(best.summary.stops)}`,
   ];
 
   for (const segment of best.candidate.segments) {
@@ -191,6 +208,20 @@ export function formatSearch(trace: SearchTrace, options: FormatOptions): string
   lines.push(
     `Provider calls: ${String(metrics?.requestCount ?? 0)} (cache ${metrics?.cache ?? "n/a"}) · fares returned: ${String(counts.offersReturned)}`,
   );
+  if (trace.discovery !== undefined) {
+    const withReturns = trace.discovery.enriched.filter(
+      (entry) => entry.returnOffersFound > 0,
+    ).length;
+    lines.push(
+      `Destinations checked for a way home: ${String(trace.discovery.enriched.length)} (${String(withReturns)} had one)` +
+        (trace.discovery.skipped.length > 0
+          ? ` · ${String(trace.discovery.skipped.length)} not checked (call budget)`
+          : ""),
+    );
+    lines.push(
+      `Calls planned: ${String(trace.discovery.callsPlanned)} of ${String(trace.discovery.callBudget)} budget`,
+    );
+  }
   const rejected = [
     counts.rejectedOutsideWindow > 0 ? `${String(counts.rejectedOutsideWindow)} outside window` : "",
     counts.rejectedNights > 0 ? `${String(counts.rejectedNights)} wrong length` : "",
@@ -198,6 +229,9 @@ export function formatSearch(trace: SearchTrace, options: FormatOptions): string
     counts.rejectedNotRoundTrip > 0 ? `${String(counts.rejectedNotRoundTrip)} not round trips` : "",
     counts.rejectedInfeasible > 0
       ? `${String(counts.rejectedInfeasible)} impossible connections`
+      : "",
+    counts.rejectedGapTooFar > 0
+      ? `${String(counts.rejectedGapTooFar)} open jaws too far apart`
       : "",
     counts.rejectedInvalid > 0 ? `${String(counts.rejectedInvalid)} unusable` : "",
   ].filter((entry) => entry !== "");

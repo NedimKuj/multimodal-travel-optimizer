@@ -8,6 +8,7 @@ import {
   FCO,
   fixtureAirports,
   fixtureGeography,
+  ISTANBUL,
   metrics,
   request,
   roundTrip,
@@ -200,5 +201,71 @@ describe("formatSearch", () => {
     const output = formatSearch(await trace([unknown]), { limit: 10 });
     expect(output).toContain("Nowhere Intl (airport only) — ZZZ");
     expect(output).toContain("Data issues: UNKNOWN_CITY_FOR_AIRPORT×1");
+  });
+});
+
+describe("open-jaw output", () => {
+  it("names both cities, the unpriced sector and what the amount excludes", async () => {
+    const outbound = roundTrip({
+      id: "oj-out",
+      destination: FCO,
+      outbound: ["2026-12-27T10:00+01:00", "2026-12-27T11:30+01:00"],
+      inbound: ["2027-01-02T18:00+01:00", "2027-01-02T19:30+01:00"],
+      amountMinor: 12000,
+    });
+    // Hand-build the trace's destination shape with a gap, as composition does.
+    const trace = await runFlightSearch(
+      request(),
+      {
+        flightProvider: stubFlightProvider(searchResult([outbound])),
+        cities: cityRepository,
+        geography: fixtureGeography,
+        airports: fixtureAirports,
+      },
+      { currency: "EUR", now: fixedClock(), newSearchId: () => "search-oj" },
+    );
+    const [destination] = trace.destinations;
+    const [candidate] = destination?.candidates ?? [];
+    if (destination === undefined || candidate === undefined) throw new Error("expected a candidate");
+
+    const gapped: SearchTrace = {
+      ...trace,
+      destinations: [
+        {
+          ...destination,
+          cities: [...destination.cities, ISTANBUL],
+          candidates: [
+            {
+              ...candidate,
+              summary: {
+                ...candidate.summary,
+                unpricedGaps: [
+                  {
+                    id: "gap",
+                    from: FCO,
+                    to: SAW,
+                    distanceKm: 250,
+                    status: "unpriced",
+                    reason: "no_licensed_source",
+                  },
+                ],
+                cost: {
+                  ...candidate.summary.cost,
+                  scope: "excludes_unpriced_segment",
+                  exclusions: ["unpriced_segment"],
+                },
+              },
+            },
+          ],
+        },
+      ],
+    };
+
+    const output = formatSearch(gapped, { limit: 5 });
+    expect(output).toContain("Rome → Istanbul (open jaw)");
+    expect(output).toContain("FCO → SAW: 250 km, UNPRICED — arrange separately");
+    expect(output).toContain("The amount above EXCLUDES FCO → SAW");
+    expect(output).toContain("Known cost:");
+    expect(output).not.toContain("total · transport only");
   });
 });

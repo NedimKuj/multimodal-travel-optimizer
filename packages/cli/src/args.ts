@@ -28,6 +28,7 @@ export interface CliOptions {
   readonly budget?: Budget;
   readonly currency: CurrencyCode;
   readonly alternativeAirports: boolean;
+  readonly openJaw: boolean;
   readonly limit: number;
   readonly json: boolean;
 }
@@ -58,6 +59,10 @@ Optional:
   --budget <amount>      Maximum spend, e.g. 700
   --budget-basis <b>     per-person (default) or total
   --currency <code>      Currency to search in (default: EUR)
+  --open-jaw             Allow flying home from a different city. Switches
+                         discovery to one-way fares (wider coverage), and the
+                         sector between the two cities is left unpriced: its
+                         cost is excluded and the output says so.
   --alternative-airports Also search nearby origin airports (off by default;
                          each one costs provider calls, and the itinerary then
                          includes the estimated transfer to reach it)
@@ -180,6 +185,7 @@ export function parseArguments(argv: readonly string[]): ParseArgumentsResult {
         "budget-basis": { type: "string" },
         currency: { type: "string" },
         "alternative-airports": { type: "boolean", default: false },
+        "open-jaw": { type: "boolean", default: false },
         limit: { type: "string" },
         json: { type: "boolean", default: false },
         help: { type: "boolean", default: false },
@@ -239,6 +245,7 @@ export function parseArguments(argv: readonly string[]): ParseArgumentsResult {
       ...(budget !== undefined && { budget }),
       currency: resolvedCurrency,
       alternativeAirports: values["alternative-airports"],
+      openJaw: values["open-jaw"],
       limit,
       json: values.json,
     },

@@ -49,9 +49,15 @@ describe("parseArguments", () => {
       budget: { kind: "perPerson", amount: { amountMinor: 70000, currency: "EUR" } },
       currency: "EUR",
       alternativeAirports: false,
+      openJaw: false,
       limit: 10,
       json: false,
     });
+  });
+
+  it("keeps open jaw off unless asked", () => {
+    expect(parsed(base).openJaw).toBe(false);
+    expect(parsed([...base, "--open-jaw"]).openJaw).toBe(true);
   });
 
   it("keeps alternative airports off unless asked", () => {
@@ -67,6 +73,7 @@ describe("parseArguments", () => {
       travelers: 1,
       currency: "EUR",
       alternativeAirports: false,
+      openJaw: false,
       limit: 10,
       json: false,
     });
