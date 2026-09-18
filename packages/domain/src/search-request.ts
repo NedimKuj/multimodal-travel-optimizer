@@ -3,7 +3,11 @@ import { z } from "zod";
 import type { DomainIssue } from "./errors.js";
 import { moneySchema, multiplyMoney, type Money } from "./money/money.js";
 import { compareLocalDates, localDateSchema, type LocalDate } from "./time/local-date.js";
-import { TRANSPORT_MODES, transportModeSchema, type TransportMode } from "./transport.js";
+import {
+  SELECTABLE_TRANSPORT_MODES,
+  selectableTransportModeSchema,
+  type SelectableTransportMode,
+} from "./transport.js";
 
 // See docs/optimizer-spec.md §7–§8, §18 and
 // docs/decisions/0004-trip-candidate-and-budget-shape.md.
@@ -28,7 +32,7 @@ export const searchRequestInputSchema = z.object({
   maxNights: z.number().int().positive().optional(),
   travelers: z.number().int().positive(),
   budget: budgetSchema.optional(),
-  transportModes: z.array(transportModeSchema).min(1),
+  transportModes: z.array(selectableTransportModeSchema).min(1),
   allowOpenJaw: z.boolean(),
   allowMultiCity: z.boolean(),
   alternativeAirports: z.boolean().optional(),
@@ -56,7 +60,7 @@ export interface SearchRequest {
   readonly maxNights?: number;
   readonly travelers: number;
   readonly budget?: Budget;
-  readonly transportModes: readonly TransportMode[];
+  readonly transportModes: readonly SelectableTransportMode[];
   readonly allowOpenJaw: boolean;
   readonly allowMultiCity: boolean;
   readonly alternativeAirports: boolean;
@@ -128,7 +132,7 @@ export function normalizeSearchRequest(input: unknown): NormalizeSearchRequestRe
       ...(raw.maxNights !== undefined && { maxNights: raw.maxNights }),
       travelers: raw.travelers,
       ...(raw.budget !== undefined && { budget: raw.budget }),
-      transportModes: TRANSPORT_MODES.filter((mode) => modes.has(mode)),
+      transportModes: SELECTABLE_TRANSPORT_MODES.filter((mode) => modes.has(mode)),
       allowOpenJaw: raw.allowOpenJaw,
       allowMultiCity: raw.allowMultiCity,
       alternativeAirports: raw.alternativeAirports ?? false,

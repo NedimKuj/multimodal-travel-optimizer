@@ -5,6 +5,8 @@ import { PRAHA_HLAVNI, PRG, SJJ, VIE, WIEN_HBF } from "./test-fixtures/locations
 import { offer, segment } from "./test-fixtures/transport.js";
 import { zonedTimestampFromOffsetIso } from "./time/zoned-timestamp.js";
 import {
+  SELECTABLE_TRANSPORT_MODES,
+  TRANSPORT_MODES,
   offerPriceForTravelers,
   transportOfferSchema,
   transportSegmentSchema,
@@ -164,5 +166,25 @@ describe("offerPriceForTravelers", () => {
   it("rejects invalid traveler counts", () => {
     const perTraveler = offer({ id: "o", segmentIds: [PRG.id], amountMinor: 7500 });
     expect(() => offerPriceForTravelers(perTraveler, 0)).toThrow(/traveler count/);
+  });
+});
+
+describe("transport modes", () => {
+  it("accepts a ground transfer as a segment mode", () => {
+    const transfer = segment({
+      id: "seg-transfer",
+      mode: "ground_transfer",
+      origin: VIE,
+      destination: WIEN_HBF,
+      departure: "2026-12-26T12:00+01:00",
+      arrival: "2026-12-26T12:30+01:00",
+    });
+    expect(transfer.mode).toBe("ground_transfer");
+    expect(transfer.durationMinutes).toBe(30);
+  });
+
+  it("keeps selectable modes separate from segment modes", () => {
+    expect([...TRANSPORT_MODES]).toContain("ground_transfer");
+    expect([...SELECTABLE_TRANSPORT_MODES]).not.toContain("ground_transfer");
   });
 });

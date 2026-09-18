@@ -24,6 +24,11 @@ transfer is therefore a normal segment: it occupies time between two places, it
 is subject to connection validation, and it can carry a price. Nothing new is
 needed in `TripCandidate`, cost calculation or the summary.
 
+It is not, however, a mode a traveler selects. A search chooses between
+flights, trains and buses; the optimizer inserts transfers where an itinerary
+needs one. The domain keeps the two lists apart (`TRANSPORT_MODES` for
+segments, `SELECTABLE_TRANSPORT_MODES` for requests).
+
 ### 2. Its cost is estimated, and labelled `estimated`
 
 The estimate comes from a documented, configurable model:

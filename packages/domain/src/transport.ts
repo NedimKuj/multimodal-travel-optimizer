@@ -12,9 +12,24 @@ import {
 
 // See docs/decisions/0002-separate-transport-offers-from-segments.md.
 
-export const TRANSPORT_MODES = ["flight", "train", "bus"] as const;
+/**
+ * Modes a segment can have. `ground_transfer` covers airport and station
+ * access and transfers between nodes (ADR 0011).
+ */
+export const TRANSPORT_MODES = ["flight", "train", "bus", "ground_transfer"] as const;
 export type TransportMode = (typeof TRANSPORT_MODES)[number];
 export const transportModeSchema = z.enum(TRANSPORT_MODES);
+
+/**
+ * Modes a traveler chooses between in a search.
+ *
+ * Ground transfers are not selectable: the optimizer inserts them where an
+ * itinerary needs one, so asking for "ground transfer" as a way to travel is
+ * meaningless.
+ */
+export const SELECTABLE_TRANSPORT_MODES = ["flight", "train", "bus"] as const;
+export type SelectableTransportMode = (typeof SELECTABLE_TRANSPORT_MODES)[number];
+export const selectableTransportModeSchema = z.enum(SELECTABLE_TRANSPORT_MODES);
 
 /**
  * A physical movement from one location to another. Carries no price.

@@ -78,6 +78,13 @@ describe("normalizeSearchRequest", () => {
     expect(request.transportModes).toEqual(["flight", "bus"]);
   });
 
+  it("does not let a search ask for ground transfers as a way to travel", () => {
+    // The optimizer inserts transfers; they are not a mode a traveler picks.
+    expect(issueCodes({ ...sarajevoNewYear, transportModes: ["ground_transfer"] })).toEqual([
+      "INVALID_SEARCH_REQUEST",
+    ]);
+  });
+
   it("rejects an empty or unknown transport mode list", () => {
     expect(issueCodes({ ...sarajevoNewYear, transportModes: [] })).toEqual([
       "INVALID_SEARCH_REQUEST",
