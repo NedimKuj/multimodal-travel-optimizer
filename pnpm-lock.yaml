@@ -200,6 +200,12 @@ importers:
         specifier: ^4.6.5
         version: 4.6.5
 
+  packages/optimizer:
+    dependencies:
+      '@travel-optimizer/domain':
+        specifier: workspace:*
+        version: link:../domain
+
   packages/providers:
     dependencies:
       '@travel-optimizer/domain':

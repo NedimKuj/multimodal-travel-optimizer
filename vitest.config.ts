@@ -14,6 +14,7 @@ export default defineConfig({
     alias: {
       "@travel-optimizer/domain": packageSource("domain"),
       "@travel-optimizer/geo": packageSource("geo"),
+      "@travel-optimizer/optimizer": packageSource("optimizer"),
       "@travel-optimizer/providers": packageSource("providers"),
     },
   },
