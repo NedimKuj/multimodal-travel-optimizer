@@ -8,7 +8,7 @@ by whom and when. "Unverified" means exactly that: not checked, not assumed.
 
 | Provider | Purpose | Live? | Cost | Rate limit | Commercial use | Booking | Status | Last verified |
 |---|---|---|---|---|---|---|---|---|
-| Aviasales Data API | Flight discovery | No — cached fares from recent user searches | Unverified | Unverified | Unverified | Redirect via affiliate link | Token held; integration in progress (Phase 0) | 2026-09-18 (attempt; docs return 403) |
+| Aviasales Data API | Flight discovery | No — cached fares from recent user searches | Unverified | Unverified | Unverified | Redirect via affiliate link | Adapter implemented and exercised live (Phase 0); see `docs/phase-0-aviasales-findings.md`. **Not cleared for production**: terms unverified | 2026-09-18 (docs return 403) |
 | Travelpayouts reference data (`/data/*.json`) | Airport/city/airline reference | Static dataset | Unverified | Unverified | Unverified | n/a | Initial source for airport reference data, fetched locally, not committed | 2026-09-18 (attempt) |
 | Aviasales Flight Search API | Real-time search, open-jaw capable | Yes | Unverified | Documented publicly as ~200 requests/hour per IP | Carries conversion obligations | Redirect | Investigated only; not implemented | 2026-09-18 |
 | Duffel Flights | Live flight verification | Yes | Unverified | Unverified | Unverified | Yes | Not started | — |
