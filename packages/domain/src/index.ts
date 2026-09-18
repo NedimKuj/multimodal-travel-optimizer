@@ -11,3 +11,4 @@ export * from "./accommodation.js";
 export * from "./search-request.js";
 export * from "./trip-candidate.js";
 export * from "./ports/providers.js";
+export * from "./ports/reference-data.js";
