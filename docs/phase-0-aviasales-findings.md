@@ -147,7 +147,42 @@ picking either side would corrupt connection validation.
 - **`v3/grouped_prices`** — same record shape as `prices_for_dates`, grouped by
   date; a cheap way to see a month at a glance.
 
-## 7. Not established by this probe
+## 7. `get_latest_prices` — investigated, not adopted
+
+Probed again on 2026-09-18 while designing Phase 1, to decide whether its
+`found_at` timestamp and coverage make it a better discovery source.
+
+| Query | Records | Destinations | All with return |
+|---|---|---|---|
+| `period_type=year`, `one_way=false`, `limit=1000` | 100 | 13 | yes |
+| `period_type=month`, `beginning_of_period=2026-12-01` | 51 | 19 | yes |
+
+The month form honours the period: departures stayed inside December. One call.
+
+**What it offers over `prices_for_dates`:** a real observation timestamp
+(`found_at`, spanning roughly the previous week in this sample), an `actual`
+flag, `distance`, and slightly wider destination coverage.
+
+**What it lacks, and why that is disqualifying for building candidates:**
+
+```text
+origin_airport / destination_airport   absent — city codes only (SJJ → IST)
+airline, flight_number                 absent
+link                                   absent — no booking or verification URL
+duration_to / duration_back            absent — only a single total duration
+transfers                              only number_of_changes, whole trip
+```
+
+Without airport identity we cannot tell SAW from IST, and without per-direction
+durations we cannot derive either arrival time. Building a segment from this
+record would mean inventing both. So it is **not used in Phase 1**.
+
+It remains a plausible **discovery hint** for a later phase: one cheap call to
+learn which routes are currently cheap, followed by targeted
+`prices_for_dates` calls that produce real segments. That is a Phase 2+
+decision, not an assumption Phase 1 relies on.
+
+## 8. Not established by this probe
 
 Two things the adapter depends on that the probe did **not** test:
 
@@ -160,7 +195,7 @@ Two things the adapter depends on that the probe did **not** test:
   spanning two months therefore needs one call per month pair; the adapter plans
   them and drops impossible pairs (return before departure).
 
-## 8. Verdict
+## 9. Verdict
 
 The Data API **is** a usable discovery layer for cached fares, with three firm
 limits: coverage is tens of destinations rather than hundreds, useful queries
