@@ -200,6 +200,18 @@ importers:
         specifier: ^4.6.5
         version: 4.6.5
 
+  packages/providers:
+    dependencies:
+      '@travel-optimizer/domain':
+        specifier: workspace:*
+        version: link:../domain
+      '@travel-optimizer/geo':
+        specifier: workspace:*
+        version: link:../geo
+      zod:
+        specifier: ^4.6.5
+        version: 4.6.5
+
 packages:
 
   '@cacheable/memory@2.2.0':
