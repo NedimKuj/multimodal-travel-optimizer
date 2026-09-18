@@ -15,6 +15,9 @@ export default defineConfig({
       "@travel-optimizer/cli": packageSource("cli"),
       "@travel-optimizer/domain": packageSource("domain"),
       "@travel-optimizer/geo": packageSource("geo"),
+      "@travel-optimizer/optimizer/test-fixtures": fileURLToPath(
+        new URL("packages/optimizer/src/test-fixtures.ts", import.meta.url),
+      ),
       "@travel-optimizer/optimizer": packageSource("optimizer"),
       "@travel-optimizer/providers": packageSource("providers"),
     },
