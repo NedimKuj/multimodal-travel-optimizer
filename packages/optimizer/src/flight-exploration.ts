@@ -6,6 +6,7 @@ import {
   parseUtcInstant,
   summarizeTrip,
   type AirportGeography,
+  type AirportRepository,
   type CityRepository,
   type CurrencyCode,
   type DomainIssue,
@@ -33,6 +34,12 @@ import {
   needsAccessTransfer,
   type GroundTransferConfig,
 } from "./ground-transfer.js";
+import {
+  expandOrigins,
+  originCodes,
+  type OriginExpansion,
+  type OriginExpansionConfig,
+} from "./origin-expansion.js";
 import { evaluateTrip, resolveTravelWindow, type TravelWindow } from "./travel-window.js";
 
 /*
@@ -78,6 +85,8 @@ export interface ExplorationCounts {
 export interface FlightExplorationResult {
   readonly status: "ok" | "partial" | "failed";
   readonly window?: TravelWindow;
+  /** Which origins were queried, and which were skipped and why. */
+  readonly origins?: OriginExpansion;
   readonly destinations: readonly DestinationResult[];
   readonly counts: ExplorationCounts;
   readonly providerFailures: readonly ProviderFailure[];
@@ -91,6 +100,8 @@ export interface FlightExplorationDeps {
   readonly cities: CityRepository;
   /** Used to measure airport-to-city distance for access transfers. */
   readonly geography: AirportGeography;
+  /** Resolves the requested origin and any alternatives. */
+  readonly airports: AirportRepository;
 }
 
 export interface FlightExplorationOptions {
@@ -99,6 +110,7 @@ export interface FlightExplorationOptions {
   readonly signal?: AbortSignal;
   readonly connectionRules?: ConnectionRules;
   readonly groundTransfer?: GroundTransferConfig;
+  readonly originExpansion?: OriginExpansionConfig;
   /** Injected so estimates carry a deterministic timestamp in tests. */
   readonly now?: () => Date;
 }
@@ -125,13 +137,41 @@ function failed(issues: readonly DomainIssue[]): FlightExplorationResult {
   };
 }
 
+/**
+ * Calls one origin costs: one per departure-month and return-month pair, which
+ * is how a month-granular provider plans them. Used only for budgeting.
+ */
+export function callsPerOrigin(window: TravelWindow): number {
+  const months = (from: string, to: string): string[] => {
+    const list: string[] = [];
+    let cursor = from.slice(0, 7);
+    const last = to.slice(0, 7);
+    while (cursor <= last && list.length <= 24) {
+      list.push(cursor);
+      const [year = "", month = ""] = cursor.split("-");
+      cursor =
+        Number(month) === 12
+          ? `${String(Number(year) + 1)}-01`
+          : `${year}-${String(Number(month) + 1).padStart(2, "0")}`;
+    }
+    return list;
+  };
+  const departures = months(window.departure.from, window.departure.to);
+  const returns = months(window.return.from, window.return.to);
+  return departures.reduce(
+    (total, departure) => total + returns.filter((entry) => entry >= departure).length,
+    0,
+  );
+}
+
 function buildQuery(
   request: SearchRequest,
   window: TravelWindow,
   currency: CurrencyCode,
+  origins: readonly string[],
 ): FlightSearchQuery {
   return {
-    origins: [request.origin],
+    origins,
     destinations: request.destination === null ? "anywhere" : [request.destination],
     departureDates: window.departure,
     // Phase 1 searches round trips only.
@@ -153,6 +193,7 @@ type AttemptOutcome =
   | { readonly ok: false; readonly counter: keyof ExplorationCounts; readonly issue?: DomainIssue };
 
 interface CandidateContext {
+  readonly requestedOrigin: Location;
   readonly cities: CityRepository;
   readonly geography: AirportGeography;
   readonly connectionRules: ConnectionRules;
@@ -237,6 +278,66 @@ function buildAccessTransfers(
   };
 }
 
+/**
+ * Connects the traveler to an alternative origin airport and back again.
+ *
+ * Nearby is not equivalent (ADR 0013): a fare from another airport is only
+ * usable if the journey to it is part of the itinerary being judged.
+ */
+function buildOriginTransfers(
+  outbound: TransportSegment,
+  inbound: TransportSegment,
+  request: SearchRequest,
+  context: CandidateContext,
+): AccessTransfers {
+  const requested = context.requestedOrigin;
+  if (outbound.origin.id === requested.id) return { segments: [], offers: [] };
+
+  const distanceKm = context.geography.distanceBetween(requested, outbound.origin);
+  if (!Number.isFinite(distanceKm)) return { segments: [], offers: [] };
+
+  const toAirport = requiredConnectionMinutes(
+    outbound.origin,
+    outbound.origin,
+    context.connectionRules,
+    { arrivingBy: "ground_transfer", departingBy: outbound.mode },
+  );
+  const fromAirport = requiredConnectionMinutes(
+    inbound.destination,
+    inbound.destination,
+    context.connectionRules,
+    { arrivingBy: inbound.mode, departingBy: "ground_transfer" },
+  );
+  if (!toAirport.ok || !fromAirport.ok) return { segments: [], offers: [] };
+
+  const out = buildGroundTransferLeg({
+    id: `${outbound.id}:origin-in`,
+    from: requested,
+    to: outbound.origin,
+    distanceKm,
+    travelers: request.travelers,
+    anchor: outbound.departureAt,
+    anchorRole: "arrive_before",
+    bufferMinutes: toAirport.minutes,
+    fetchedAt: context.fetchedAt,
+    config: context.groundTransfer,
+  });
+  const back = buildGroundTransferLeg({
+    id: `${inbound.id}:origin-out`,
+    from: inbound.destination,
+    to: requested,
+    distanceKm,
+    travelers: request.travelers,
+    anchor: inbound.arrivalAt,
+    anchorRole: "depart_after",
+    bufferMinutes: fromAirport.minutes,
+    fetchedAt: context.fetchedAt,
+    config: context.groundTransfer,
+  });
+
+  return { segments: [out.segment, back.segment], offers: [out.offer, back.offer] };
+}
+
 /** Turns one offer into a validated, feasible, in-window, in-budget candidate. */
 function buildCandidate(
   offer: TransportOffer,
@@ -253,7 +354,8 @@ function buildCandidate(
   }
 
   const access = buildAccessTransfers(outbound, inbound, request, context);
-  const allSegments = [outbound, inbound, ...access.segments].sort((a, b) =>
+  const originAccess = buildOriginTransfers(outbound, inbound, request, context);
+  const allSegments = [outbound, inbound, ...access.segments, ...originAccess.segments].sort((a, b) =>
     a.departureAt.instant < b.departureAt.instant
       ? -1
       : a.departureAt.instant > b.departureAt.instant
@@ -280,7 +382,7 @@ function buildCandidate(
     origin: first.origin,
     travelers: request.travelers,
     segments: allSegments,
-    offers: [offer, ...access.offers],
+    offers: [offer, ...access.offers, ...originAccess.offers],
     stays: [],
   };
 
@@ -424,7 +526,19 @@ export async function exploreFlights(
   }
   const { window } = windowResult;
 
-  const query = buildQuery(request, window, options.currency);
+  const expansion = expandOrigins({
+    request,
+    airports: deps.airports,
+    geography: deps.geography,
+    callsPerOrigin: callsPerOrigin(window),
+    callBudget: deps.flightProvider.descriptor.maxCallsPerSearch ?? Number.POSITIVE_INFINITY,
+    ...(options.originExpansion !== undefined && { config: options.originExpansion }),
+  });
+  if (expansion.origins.length === 0) {
+    return { ...failed(expansion.issues), window };
+  }
+
+  const query = buildQuery(request, window, options.currency, originCodes(expansion));
   const providerResult = await deps.flightProvider.search(
     query,
     options.signal === undefined ? undefined : { signal: options.signal },
@@ -434,12 +548,18 @@ export async function exploreFlights(
     return {
       ...failed([]),
       window,
+      origins: expansion,
       providerFailures: providerResult.failures,
       providerMetrics: providerResult.metrics,
     };
   }
 
+  const requestedOrigin = expansion.origins[0]?.airport;
+  if (requestedOrigin === undefined) {
+    return { ...failed([]), window, origins: expansion };
+  }
   const context: CandidateContext = {
+    requestedOrigin,
     cities: deps.cities,
     geography: deps.geography,
     connectionRules: options.connectionRules ?? DEFAULT_CONNECTION_RULES,
@@ -472,6 +592,7 @@ export async function exploreFlights(
   return {
     status: providerResult.status === "partial" ? "partial" : "ok",
     window,
+    origins: expansion,
     destinations,
     counts,
     providerFailures: providerResult.failures,

@@ -72,6 +72,7 @@ function toSearchRequestInput(options: CliOptions): Record<string, unknown> {
     transportModes: ["flight"],
     allowOpenJaw: false,
     allowMultiCity: false,
+    alternativeAirports: options.alternativeAirports,
   };
 }
 
@@ -149,7 +150,12 @@ export async function run(
 
   const trace = await runFlightSearch(
     normalized.request,
-    { flightProvider: provider, cities: referenceData.cities, geography: referenceData.geography },
+    {
+      flightProvider: provider,
+      cities: referenceData.cities,
+      geography: referenceData.geography,
+      airports: referenceData.airports,
+    },
     { currency: options.currency },
   );
 

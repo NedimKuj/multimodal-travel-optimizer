@@ -6,6 +6,7 @@ import {
 import {
   cityRepository,
   FCO,
+  fixtureAirports,
   fixtureGeography,
   metrics,
   request,
@@ -46,7 +47,7 @@ async function trace(
 ): Promise<SearchTrace> {
   return runFlightSearch(
     request(overrides),
-    { flightProvider: stubFlightProvider(searchResult(parts)), cities: cityRepository, geography: fixtureGeography },
+    { flightProvider: stubFlightProvider(searchResult(parts)), cities: cityRepository, geography: fixtureGeography, airports: fixtureAirports },
     { currency: "EUR", now: fixedClock(), newSearchId: () => "search-1" },
   );
 }
@@ -153,6 +154,7 @@ describe("formatSearch", () => {
         ),
         cities: cityRepository,
         geography: fixtureGeography,
+        airports: fixtureAirports,
       },
       { currency: "EUR", now: fixedClock(), newSearchId: () => "search-2" },
     );
@@ -178,7 +180,7 @@ describe("formatSearch", () => {
     const output = formatSearch(
       await runFlightSearch(
         request({ travelers: 3 }),
-        { flightProvider: stubFlightProvider(searchResult([odd])), cities: cityRepository, geography: fixtureGeography },
+        { flightProvider: stubFlightProvider(searchResult([odd])), cities: cityRepository, geography: fixtureGeography, airports: fixtureAirports },
         { currency: "EUR", now: fixedClock(), newSearchId: () => "search-3" },
       ),
       { limit: 10 },

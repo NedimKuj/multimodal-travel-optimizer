@@ -35,6 +35,11 @@ export interface ProviderDescriptor {
   readonly enabled: boolean;
   /** Source types this provider can legitimately produce. */
   readonly sourceTypes: readonly SourceType[];
+  /**
+   * Calls this provider will accept for one search. The optimizer budgets
+   * fan-out against it instead of hard-coding a provider's limit.
+   */
+  readonly maxCallsPerSearch?: number;
 }
 
 export type ProviderFailureKind =

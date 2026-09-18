@@ -17,6 +17,7 @@ import {
   type ExplorationCounts,
   type FlightExplorationDeps,
 } from "./flight-exploration.js";
+import type { OriginExpansionRecord } from "./origin-expansion.js";
 import type { TravelWindow } from "./travel-window.js";
 
 /*
@@ -66,6 +67,8 @@ export interface SearchTrace {
   readonly request: SearchRequest;
   readonly currency: CurrencyCode;
   readonly window?: TravelWindow;
+  /** Origins queried and alternatives skipped, with reasons (ADR 0013). */
+  readonly origins?: OriginExpansionRecord;
   readonly startedAt: UtcInstant;
   readonly completedAt: UtcInstant;
   readonly stages: readonly SearchStageRecord[];
@@ -147,6 +150,7 @@ export async function runFlightSearch(
     request,
     currency,
     ...(exploration.window !== undefined && { window: exploration.window }),
+    ...(exploration.origins !== undefined && { origins: exploration.origins }),
     startedAt,
     completedAt,
     stages,

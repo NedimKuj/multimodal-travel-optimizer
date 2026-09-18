@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { OPTIMIZER_VERSION, runFlightSearch, searchFingerprint } from "./search-trace.js";
 import {
   cityRepository,
+  fixtureAirports,
   fixtureGeography,
   FCO,
   metrics,
@@ -30,7 +31,7 @@ function fixedClock(): () => Date {
 async function trace(overrides: Record<string, unknown> = {}) {
   return runFlightSearch(
     request(overrides),
-    { flightProvider: stubFlightProvider(searchResult([romeTrip])), cities: cityRepository, geography: fixtureGeography },
+    { flightProvider: stubFlightProvider(searchResult([romeTrip])), cities: cityRepository, geography: fixtureGeography, airports: fixtureAirports },
     { currency: "EUR", now: fixedClock(), newSearchId: () => "search-1" },
   );
 }
@@ -116,6 +117,7 @@ describe("runFlightSearch", () => {
         ),
         cities: cityRepository,
         geography: fixtureGeography,
+        airports: fixtureAirports,
       },
       { currency: "EUR", now: fixedClock(), newSearchId: () => "search-2" },
     );
@@ -130,7 +132,7 @@ describe("runFlightSearch", () => {
     const run = async () =>
       runFlightSearch(
         request(),
-        { flightProvider: stubFlightProvider(searchResult([romeTrip])), cities: cityRepository, geography: fixtureGeography },
+        { flightProvider: stubFlightProvider(searchResult([romeTrip])), cities: cityRepository, geography: fixtureGeography, airports: fixtureAirports },
         { currency: "EUR", now: fixedClock(), newSearchId: () => `search-${String(++counter)}` },
       );
     const [first, second] = [await run(), await run()];
@@ -155,6 +157,7 @@ describe("runFlightSearch", () => {
         flightProvider: stubFlightProvider(searchResult([romeTrip, tooShort])),
         cities: cityRepository,
         geography: fixtureGeography,
+        airports: fixtureAirports,
       },
       { currency: "EUR", now: fixedClock(), newSearchId: () => "search-3" },
     );

@@ -48,9 +48,15 @@ describe("parseArguments", () => {
       travelers: 2,
       budget: { kind: "perPerson", amount: { amountMinor: 70000, currency: "EUR" } },
       currency: "EUR",
+      alternativeAirports: false,
       limit: 10,
       json: false,
     });
+  });
+
+  it("keeps alternative airports off unless asked", () => {
+    expect(parsed(base).alternativeAirports).toBe(false);
+    expect(parsed([...base, "--alternative-airports"]).alternativeAirports).toBe(true);
   });
 
   it("applies only the documented defaults", () => {
@@ -60,6 +66,7 @@ describe("parseArguments", () => {
       flexibilityDays: 0,
       travelers: 1,
       currency: "EUR",
+      alternativeAirports: false,
       limit: 10,
       json: false,
     });

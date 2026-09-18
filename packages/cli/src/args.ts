@@ -27,6 +27,7 @@ export interface CliOptions {
   readonly travelers: number;
   readonly budget?: Budget;
   readonly currency: CurrencyCode;
+  readonly alternativeAirports: boolean;
   readonly limit: number;
   readonly json: boolean;
 }
@@ -57,6 +58,9 @@ Optional:
   --budget <amount>      Maximum spend, e.g. 700
   --budget-basis <b>     per-person (default) or total
   --currency <code>      Currency to search in (default: EUR)
+  --alternative-airports Also search nearby origin airports (off by default;
+                         each one costs provider calls, and the itinerary then
+                         includes the estimated transfer to reach it)
   --limit <n>            Destinations to print (default: 10)
   --json                 Print the full search trace as JSON
   --help                 Show this message
@@ -175,6 +179,7 @@ export function parseArguments(argv: readonly string[]): ParseArgumentsResult {
         budget: { type: "string" },
         "budget-basis": { type: "string" },
         currency: { type: "string" },
+        "alternative-airports": { type: "boolean", default: false },
         limit: { type: "string" },
         json: { type: "boolean", default: false },
         help: { type: "boolean", default: false },
@@ -233,6 +238,7 @@ export function parseArguments(argv: readonly string[]): ParseArgumentsResult {
       travelers,
       ...(budget !== undefined && { budget }),
       currency: resolvedCurrency,
+      alternativeAirports: values["alternative-airports"],
       limit,
       json: values.json,
     },

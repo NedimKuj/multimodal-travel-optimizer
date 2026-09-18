@@ -153,6 +153,21 @@ export function formatSearch(trace: SearchTrace, options: FormatOptions): string
       `Window ${trace.window.outerBounds.from} .. ${trace.window.outerBounds.to} · ${nights} · ${trace.window.mode} mode`,
     );
   }
+  if (trace.origins !== undefined && trace.origins.origins.length > 1) {
+    const extra = trace.origins.origins
+      .filter((origin) => !origin.isPrimary)
+      .map((origin) => `${origin.airport.iata ?? origin.airport.id} (${String(Math.round(origin.distanceKm))} km)`);
+    lines.push(`Also departing from ${extra.join(", ")}`);
+  }
+  if (trace.origins !== undefined && trace.origins.skipped.length > 0) {
+    const skipped = trace.origins.skipped
+      .map(
+        (entry) =>
+          `${entry.airport.iata ?? entry.airport.id} (${String(Math.round(entry.distanceKm))} km, ${entry.reason === "call_budget" ? "call budget" : "cap"})`,
+      )
+      .join(", ");
+    lines.push(`Alternative origins not searched: ${skipped}`);
+  }
   if (request.budget !== undefined) {
     const basis = request.budget.kind === "perPerson" ? "per person" : "total";
     lines.push(`Budget ${formatMoney(request.budget.amount)} ${basis}`);

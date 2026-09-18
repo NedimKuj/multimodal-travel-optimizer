@@ -40,6 +40,9 @@ export interface SkippedOrigin {
   readonly reason: SkipReason;
 }
 
+/** Alias used by the search trace, so a reader sees what it records. */
+export type OriginExpansionRecord = OriginExpansion;
+
 export interface OriginExpansion {
   readonly origins: readonly SelectedOrigin[];
   readonly skipped: readonly SkippedOrigin[];

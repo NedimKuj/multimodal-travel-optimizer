@@ -2,8 +2,10 @@ import { failedResult, partialResult, type FlightSearchQuery } from "@travel-opt
 import { describe, expect, it } from "vitest";
 
 import { exploreFlights } from "./flight-exploration.js";
+import { offer, segment } from "./test-fixtures.js";
 import {
   cityRepository,
+  fixtureAirports,
   fixtureGeography,
   CIA,
   FCO,
@@ -13,6 +15,7 @@ import {
   SAW,
   searchResult,
   stubFlightProvider,
+  TZL,
 } from "./test-fixtures.js";
 
 const options = { currency: "EUR" } as const;
@@ -41,7 +44,7 @@ async function explore(
 ) {
   return exploreFlights(
     request(overrides),
-    { flightProvider: stubFlightProvider(searchResult(parts)), cities: cityRepository, geography: fixtureGeography },
+    { flightProvider: stubFlightProvider(searchResult(parts)), cities: cityRepository, geography: fixtureGeography, airports: fixtureAirports },
     options,
   );
 }
@@ -57,6 +60,7 @@ describe("exploreFlights", () => {
         }),
         cities: cityRepository,
         geography: fixtureGeography,
+        airports: fixtureAirports,
       },
       options,
     );
@@ -230,6 +234,7 @@ describe("exploreFlights — provider outcomes", () => {
         ),
         cities: cityRepository,
         geography: fixtureGeography,
+        airports: fixtureAirports,
       },
       options,
     );
@@ -252,6 +257,7 @@ describe("exploreFlights — provider outcomes", () => {
         ),
         cities: cityRepository,
         geography: fixtureGeography,
+        airports: fixtureAirports,
       },
       options,
     );
@@ -358,5 +364,88 @@ describe("exploreFlights — access transfers and feasibility", () => {
     const candidate = result.destinations[0]?.candidates[0];
     expect(candidate?.summary.departureDate).toBe("2026-12-27");
     expect(candidate?.summary.returnDate).toBe("2027-01-02");
+  });
+});
+
+
+describe("exploreFlights — alternative origins", () => {
+  // A fare leaving from Tuzla, 71 km from the requested origin.
+  const fromTuzla = {
+    segments: [
+      segment({
+        id: "tzl-out",
+        origin: TZL,
+        destination: CIA,
+        departure: "2026-12-27T10:00+01:00",
+        arrival: "2026-12-27T11:30+01:00",
+      }),
+      segment({
+        id: "tzl-back",
+        origin: CIA,
+        destination: TZL,
+        departure: "2027-01-02T18:00+01:00",
+        arrival: "2027-01-02T19:30+01:00",
+      }),
+    ],
+    offer: offer("tzl-fare", ["tzl-out", "tzl-back"], 6000),
+  };
+
+  it("queries only the requested origin by default", async () => {
+    let seen: FlightSearchQuery | undefined;
+    await exploreFlights(
+      request(),
+      {
+        flightProvider: stubFlightProvider(searchResult([romeTrip]), (query) => {
+          seen = query;
+        }),
+        cities: cityRepository,
+        geography: fixtureGeography,
+        airports: fixtureAirports,
+      },
+      options,
+    );
+    expect(seen?.origins).toEqual(["SJJ"]);
+  });
+
+  it("queries nearby origins when asked, and reports which", async () => {
+    let seen: FlightSearchQuery | undefined;
+    const result = await exploreFlights(
+      request({ alternativeAirports: true }),
+      {
+        flightProvider: stubFlightProvider(searchResult([romeTrip]), (query) => {
+          seen = query;
+        }),
+        cities: cityRepository,
+        geography: fixtureGeography,
+        airports: fixtureAirports,
+      },
+      options,
+    );
+    expect(seen?.origins).toEqual(["SJJ", "TZL"]);
+    expect(result.origins?.origins.map((entry) => entry.airport.iata)).toEqual(["SJJ", "TZL"]);
+    expect(result.origins?.plannedCalls).toBeGreaterThan(0);
+  });
+
+  it("adds the journey to an alternative origin, so it is judged as a whole trip", async () => {
+    const result = await exploreFlights(
+      request({ alternativeAirports: true }),
+      {
+        flightProvider: stubFlightProvider(searchResult([fromTuzla])),
+        cities: cityRepository,
+        geography: fixtureGeography,
+        airports: fixtureAirports,
+      },
+      options,
+    );
+    const candidate = result.destinations[0]?.candidates[0];
+    // Ciampino needs no access transfer, so these two are the drive to Tuzla.
+    expect(candidate?.candidate.segments.filter((s) => s.mode === "ground_transfer")).toHaveLength(2);
+    expect(candidate?.candidate.origin.iata).toBe("SJJ");
+    expect(candidate?.summary.cost.fares).toEqual({ amountMinor: 12000, currency: "EUR" });
+    expect(candidate?.summary.cost.groundTransfer.amountMinor).toBeGreaterThan(0);
+    expect(candidate?.summary.provenance).toMatchObject({
+      fareSourceType: "cached",
+      partiallyEstimated: true,
+    });
   });
 });

@@ -71,6 +71,7 @@ describe("AviasalesFlightProvider", () => {
       kind: "flight",
       enabled: true,
       sourceTypes: ["cached"],
+      maxCallsPerSearch: 12,
     });
   });
 

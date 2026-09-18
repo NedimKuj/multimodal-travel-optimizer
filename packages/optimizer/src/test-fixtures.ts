@@ -7,6 +7,7 @@ import {
   transportSegmentSchema,
   zonedTimestampFromOffsetIso,
   type AirportGeography,
+  type AirportRepository,
   type CityRepository,
   type FlightProvider,
   type FlightSearchQuery,
@@ -54,6 +55,7 @@ export function airport(code: string, name: string, timeZone = "Europe/Sarajevo"
 export const SJJ = location({ code: "SJJ", name: "Sarajevo", timeZone: "Europe/Sarajevo", countryCode: "BA" });
 export const FCO = location({ code: "FCO", name: "Rome Fiumicino", timeZone: "Europe/Rome", countryCode: "IT" });
 export const CIA = location({ code: "CIA", name: "Rome Ciampino", timeZone: "Europe/Rome", countryCode: "IT" });
+export const TZL = location({ code: "TZL", name: "Tuzla", timeZone: "Europe/Sarajevo", countryCode: "BA" });
 export const SAW = location({ code: "SAW", name: "Istanbul Sabiha", timeZone: "Europe/Istanbul", countryCode: "TR" });
 export const ROME = location({ code: "ROM", name: "Rome", timeZone: "Europe/Rome", countryCode: "IT", type: "city" });
 export const ISTANBUL = location({ code: "IST", name: "Istanbul", timeZone: "Europe/Istanbul", countryCode: "TR", type: "city" });
@@ -66,6 +68,7 @@ export const FIXTURE_DISTANCES_KM: Record<string, number> = {
   [`${FCO.id}->${ROME.id}`]: 30,
   [`${CIA.id}->${ROME.id}`]: 15,
   [`${SAW.id}->${ISTANBUL.id}`]: 40,
+  [`${SJJ.id}->${TZL.id}`]: 71,
 };
 
 export const fixtureGeography: AirportGeography = {
@@ -78,7 +81,21 @@ export const fixtureGeography: AirportGeography = {
     FIXTURE_DISTANCES_KM[`${from.id}->${to.id}`] ??
     FIXTURE_DISTANCES_KM[`${to.id}->${from.id}`] ??
     Number.POSITIVE_INFINITY,
-  findNearby: () => [],
+  // Tuzla is the one alternative origin near Sarajevo in these fixtures.
+  findNearby: (center, radiusKm) =>
+    center.id === SJJ.id && radiusKm >= 71 ? [{ airport: TZL, distanceKm: 71 }] : [],
+};
+
+export const fixtureAirports: AirportRepository = {
+  provenance: {
+    source: "test-fixture",
+    fetchedAt: parseUtcInstant("2026-09-18T08:00:00Z"),
+    recordCount: 4,
+  },
+  findByIata: (iata) => {
+    const byCode: Record<string, Location> = { SJJ, FCO, CIA, SAW, TZL };
+    return byCode[iata];
+  },
 };
 
 export const cityRepository: CityRepository = {

@@ -194,6 +194,7 @@ export function createAviasalesFlightProvider(
     enabled: config.enabled,
     // This API only ever serves cached fares.
     sourceTypes: ["cached"],
+    maxCallsPerSearch: MAX_CALLS_PER_SEARCH,
   };
 
   return {
