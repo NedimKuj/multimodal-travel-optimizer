@@ -2031,6 +2031,41 @@ Add:
 - buses
 - connection validation
 
+### Scope boundary
+
+Phase 2 delivers the **provider-independent** layer: airport/station/city
+relationships, ground transfers, configurable connection times, and opt-in
+alternative-origin expansion. It does not depend on a licensed rail or bus
+provider.
+
+Rail and bus **ports and fixtures** exist so the graph can be built and tested.
+A production rail/bus adapter is written only when all four hold:
+
+1. the source is identified,
+2. its applicable terms/licence are documented,
+3. our intended use is permitted,
+4. the source supplies data sufficient for our requirements.
+
+No scraping, and no inferred or fabricated timetables. If nothing clears, the
+adapter stays unimplemented and the blocker is recorded in
+`docs/provider-compliance.md`.
+
+**Finish line:** geography, ground transfers and connection validation
+implemented and tested against provider-independent fixtures, and the rail
+source investigation carries a documented compliance decision. If a source
+clears, its implementation is **Phase 2b** rather than an extension of Phase 2.
+
+### Airport breadth vs origin expansion
+
+These are different things and are budgeted differently:
+
+- **Destination** airport breadth comes from the discovery provider. An
+  "anywhere" search already returns every destination airport, so it costs no
+  extra calls.
+- **Origin** expansion is an optional, budgeted search dimension: each extra
+  origin consumes provider calls. It is off by default, enabled per search, and
+  capped (`docs/decisions/0013-alternative-origin-expansion.md`).
+
 ---
 
 ## Phase 3 — Open-jaw

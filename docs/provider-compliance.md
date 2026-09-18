@@ -231,9 +231,59 @@ For every source verify:
 
 Timetable availability does not imply fare or booking availability.
 
+### Status: blocked, under investigation (Phase 2)
+
+```text
+Access status:   no source cleared
+Implementation:  NOT PERMITTED until the conditions below are met
+Last updated:    2026-09-18
+```
+
+A production rail (or bus) adapter may be implemented only when **all four**
+hold, each recorded here:
+
+1. the source is identified by name and endpoint/dataset,
+2. its applicable terms or licence are documented,
+3. our intended use — a commercial multimodal trip optimizer — is permitted,
+4. the data is sufficient for our requirements (see below).
+
+Until then the `RailProvider` and `BusProvider` ports stay unimplemented.
+Fixtures exist for tests only. **No scraping, and no inferred or fabricated
+timetables.** If nothing clears, that is the recorded outcome and rail stays
+unimplemented.
+
+### What the investigation must establish
+
+Scope: **GTFS and DB open data first.** GTFS is a data format and an ecosystem,
+not a single provider, so each feed carries its own publisher and licence and
+must be assessed individually.
+
+- which specific feeds cover journeys relevant to our origin (Sarajevo) and the
+  destinations discovery actually returns
+- the licence of each feed, and whether commercial use and redistribution of
+  derived results are permitted
+- update frequency, and whether static schedules are enough or real-time is
+  required
+- whether fares are included at all; a timetable-only feed yields segments with
+  no offer, which the domain supports (ADR 0002) but which cannot produce a
+  priced trip
+- attribution obligations
+- any registration, contract or approval prerequisite
+
+### Sufficiency bar
+
+A cleared source must let us build a normalized `TransportSegment`: both
+endpoints resolvable to stations we can locate, departure and arrival with
+usable time zones, and a duration. Anything less cannot enter the domain
+without inventing data, and therefore does not clear.
+
 ---
 
 ## Bus Data
+
+Same status as rail: **blocked, under investigation**. The conditions, the
+sufficiency bar and the prohibition on scraping or inferred timetables in the
+Rail Data section apply identically here.
 
 Potential regional sources may include:
 

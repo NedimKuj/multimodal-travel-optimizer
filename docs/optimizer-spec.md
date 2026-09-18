@@ -434,6 +434,15 @@ These are initial configurable defaults, not immutable constants.
 
 The implementation should allow future provider- or location-specific rules.
 
+Two rules that follow from them
+(`docs/decisions/0012-connection-time-rules.md`):
+
+- Connections are compared as **absolute instants**, never as local clock
+  times, so a connection across a time-zone or DST boundary is judged correctly.
+- A change between two nodes at the same location uses the "same station"
+  value. A connection the rules cannot classify is rejected rather than allowed
+  by default.
+
 ---
 
 ## 13. Airport and Station Transfers
@@ -452,6 +461,19 @@ Ground transfer time must be considered when connecting different transport node
 
 A connection must not be considered valid merely because the calendar times overlap.
 
+Ground transfers are modelled as transport segments in their own mode
+(`docs/decisions/0011-ground-transfers.md`), so a transfer occupies time, is
+subject to connection validation, and can carry a price.
+
+No provider prices ground transfers today, so their cost is **estimated** from
+a documented, configurable model and labelled `estimated`. An estimated cost is
+shown separately and is never presented as a bookable or verified price; a trip
+containing one aggregates to `estimated` under the weakest-source rule.
+
+An access transfer is attached only when it is material: an airport further
+from its city than the configured threshold gets an explicit transfer leg,
+while one inside it does not.
+
 ---
 
 ## 14. Alternative Airports
@@ -462,6 +484,16 @@ Alternative airports may be considered when:
 - ground transportation to/from the destination is feasible
 - the additional transfer time is accounted for
 - the resulting complete itinerary remains valid
+
+Geographic proximity alone never makes two airports equivalent: the transfer's
+time and cost are part of the itinerary being compared.
+
+Destination-side breadth comes from destination discovery and costs no extra
+provider calls. **Origin-side expansion is an optional, budgeted dimension**: it
+is off unless the request asks for it, capped, deterministic (distance, then
+IATA code), and bounded by the provider call budget. Alternatives that do not
+fit the budget are recorded as skipped with their reason
+(`docs/decisions/0013-alternative-origin-expansion.md`).
 
 Example:
 
