@@ -93,8 +93,11 @@ describe("raw response to trip cost", () => {
     const result = summarizeTrip(trip);
     if (!result.ok) throw new Error("expected a summary");
 
-    expect(result.summary.sourceType).toBe("cached");
-    expect(result.summary.sources).toEqual(["aviasales"]);
+    expect(result.summary.provenance).toMatchObject({
+      fareSourceType: "cached",
+      fareSources: ["aviasales"],
+      partiallyEstimated: false,
+    });
     expect(result.summary.cost.scope).toBe("transport_and_partial_accommodation");
     expect(result.summary.uncoveredNights).toHaveLength(9);
   });

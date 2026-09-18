@@ -235,7 +235,7 @@ describe("time, legs, stops and connections", () => {
   it("separates moving time from total duration", () => {
     const result = summary(multiCity);
     expect(result.travelTimeMinutes).toBe(75 + 240 + 100);
-    expect(result.totalDurationMinutes).toBe(7 * 24 * 60 + 9 * 60 + 40);
+    expect(result.totalJourneyDurationMinutes).toBe(7 * 24 * 60 + 9 * 60 + 40);
   });
 
   it("counts changes without a stay in between, and stops inside segments", () => {
@@ -353,7 +353,7 @@ describe("accommodation coverage", () => {
 });
 
 describe("provenance", () => {
-  it("is only as strong as the weakest price", () => {
+  it("is only as strong as the weakest retrieved price", () => {
     const candidate = trip({
       ...roundTrip,
       offers: [
@@ -361,10 +361,14 @@ describe("provenance", () => {
       ],
       stays: [viennaWeek], // cached
     });
-    expect(summary(candidate).sourceType).toBe("cached");
+    expect(summary(candidate).provenance).toMatchObject({
+      fareSourceType: "cached",
+      partiallyEstimated: false,
+      estimatedComponents: [],
+    });
   });
 
-  it("is live only when every price is live", () => {
+  it("is live only when every retrieved price is live", () => {
     const candidate = trip({
       ...roundTrip,
       offers: [
@@ -372,7 +376,7 @@ describe("provenance", () => {
       ],
       stays: [],
     });
-    expect(summary(candidate)).toMatchObject({ sourceType: "live", sources: ["fixture"] });
+    expect(summary(candidate).provenance).toMatchObject({ fareSourceType: "live", fareSources: ["fixture"] });
   });
 });
 
@@ -495,5 +499,146 @@ describe("invalid trips", () => {
       stays: [{ ...viennaThreeNights, guests: 1 }, pragueFourNights],
     };
     expect(issueCodes(candidate)).toEqual(["UNPRICED_SEGMENT", "STAY_GUEST_COUNT_MISMATCH"]);
+  });
+});
+
+// ── Component-level provenance and cost breakdown (ADR 0011) ─────────────────
+
+describe("trips containing an estimated transfer", () => {
+  const transferSegment = segment({
+    id: "seg-transfer-vie",
+    mode: "ground_transfer",
+    origin: VIE,
+    destination: WIEN_HBF,
+    departure: "2026-12-26T11:30+01:00",
+    arrival: "2026-12-26T12:15+01:00",
+  });
+
+  const transferOffer = offer({
+    id: "offer-transfer",
+    segmentIds: [transferSegment.id],
+    amountMinor: 900,
+    sourceType: "estimated",
+  });
+
+  function withTransfer(fareSourceType: "cached" | "live") {
+    return trip({
+      id: `with-transfer-${fareSourceType}`,
+      segments: [sjjToVie, transferSegment, vieToSjj],
+      offers: [
+        offer({
+          id: "offer-rt",
+          segmentIds: [sjjToVie.id, vieToSjj.id],
+          amountMinor: 15000,
+          sourceType: fareSourceType,
+        }),
+        transferOffer,
+      ],
+      stays: [],
+    });
+  }
+
+  it("keeps a cached fare cached while naming the estimated component", () => {
+    expect(summary(withTransfer("cached")).provenance).toEqual({
+      fareSourceType: "cached",
+      fareSources: ["fixture"],
+      estimatedComponents: ["access_transfer"],
+      estimateSources: ["fixture"],
+      partiallyEstimated: true,
+    });
+  });
+
+  it("keeps a live fare live alongside an estimated transfer", () => {
+    expect(summary(withTransfer("live")).provenance).toMatchObject({
+      fareSourceType: "live",
+      partiallyEstimated: true,
+    });
+  });
+
+  it("reports no estimated component when there is no transfer", () => {
+    expect(summary(roundTrip).provenance).toMatchObject({
+      fareSourceType: "cached",
+      estimatedComponents: [],
+      estimateSources: [],
+      partiallyEstimated: false,
+    });
+  });
+
+  it("breaks the cost into fares, transfers and the estimated portion", () => {
+    const { cost } = summary(withTransfer("cached"));
+    expect(cost.fares).toEqual(money(30000, "EUR")); // 150.00 x 2 travelers
+    expect(cost.groundTransfer).toEqual(money(1800, "EUR")); // 9.00 x 2 travelers
+    expect(cost.transport).toEqual(money(31800, "EUR"));
+    expect(cost.estimated).toEqual(money(1800, "EUR"));
+    expect(cost.total).toEqual(money(31800, "EUR"));
+  });
+
+  it("includes the transfer in the total the traveler pays", () => {
+    const withoutTransfer = summary(trip({ ...roundTrip, stays: [] })).cost.total;
+    const withIt = summary(withTransfer("cached")).cost.total;
+    expect(compareMoney(withoutTransfer, withIt)).toBe(-1);
+  });
+
+  it("lists several estimated components without repeating one", () => {
+    const secondTransfer = segment({
+      id: "seg-transfer-back",
+      mode: "ground_transfer",
+      origin: WIEN_HBF,
+      destination: VIE,
+      departure: "2027-01-02T15:00+01:00",
+      arrival: "2027-01-02T15:45+01:00",
+    });
+    const candidate = trip({
+      id: "two-transfers",
+      segments: [sjjToVie, transferSegment, secondTransfer, vieToSjj],
+      offers: [
+        offer({ id: "offer-rt", segmentIds: [sjjToVie.id, vieToSjj.id], amountMinor: 15000 }),
+        transferOffer,
+        offer({
+          id: "offer-transfer-back",
+          segmentIds: [secondTransfer.id],
+          amountMinor: 900,
+          sourceType: "estimated",
+        }),
+      ],
+      stays: [],
+    });
+    const { provenance, cost } = summary(candidate);
+    expect(provenance.estimatedComponents).toEqual(["access_transfer"]);
+    expect(cost.groundTransfer).toEqual(money(3600, "EUR"));
+  });
+
+  it("dates the trip by its flights, not by the transfers around them", () => {
+    // An access transfer the evening before does not move the departure date.
+    const earlyTransfer = segment({
+      id: "seg-transfer-early",
+      mode: "ground_transfer",
+      origin: PRAGUE,
+      destination: SJJ,
+      departure: "2026-12-25T22:00+01:00",
+      arrival: "2026-12-26T06:00+01:00",
+    });
+    const candidate = trip({
+      id: "early-transfer",
+      segments: [earlyTransfer, sjjToVie, vieToSjj],
+      offers: [
+        offer({ id: "offer-rt", segmentIds: [sjjToVie.id, vieToSjj.id], amountMinor: 15000 }),
+        offer({
+          id: "offer-transfer-early",
+          segmentIds: [earlyTransfer.id],
+          amountMinor: 2000,
+          sourceType: "estimated",
+        }),
+      ],
+      stays: [],
+      origin: PRAGUE,
+    });
+    const result = summary(candidate);
+    expect(result.departureDate).toBe("2026-12-26"); // the flight's date
+    expect(result.returnDate).toBe("2027-01-02"); // the return flight's departure
+    // The physical journey does start the evening before.
+    expect(result.totalJourneyDurationMinutes).toBeGreaterThan(
+      7 * 24 * 60 + 9 * 60,
+    );
   });
 });

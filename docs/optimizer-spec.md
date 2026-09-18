@@ -352,6 +352,23 @@ Dec 29–Jan 2: Prague
 Jan 2: PRG → SJJ
 ```
 
+Three quantities are distinct and must not be conflated
+(`docs/decisions/0011-ground-transfers.md`):
+
+```text
+flight date window        the dates the traveler asked for; bounded by the
+                          outbound fare segment's departure date and the
+                          return fare segment's departure date
+destination stay nights   arrival in the destination city to departure from
+                          it; the value accommodation consumes
+total journey duration    first leg to last leg, transfers included; may start
+                          before the window and end after it
+```
+
+An access transfer that begins the previous evening does not change the
+requested departure date, and `minNights`/`maxNights` are never reinterpreted
+as total time away from home.
+
 The optimizer must ensure:
 
 - every night on the ground is either covered by a stay or reported as an
@@ -656,6 +673,22 @@ several segments contributes once. A trip containing a segment not covered by
 any selected offer has no complete transport cost and must not be presented as
 fully priced.
 
+The total is reported as a breakdown, not one number
+(`docs/decisions/0011-ground-transfers.md`):
+
+```text
+fares            retrieved transport prices
+ground transfer  airport/station access, currently estimated
+accommodation
+estimated        the portion of the total that is modelled, not retrieved
+────────────────
+total
+```
+
+Access transfers are included **wherever they apply** — primary origin,
+destination, or an alternative airport — so two itineraries are always compared
+on the same scope.
+
 ---
 
 ## 20. Accommodation
@@ -687,6 +720,29 @@ Every externally sourced price must retain provenance.
 
 Provenance belongs to the priced object: a `TransportOffer`, a `Stay`, or an
 exchange rate. Transport segments carry their data source but no price.
+
+### Provenance is component-level, not one label
+
+A trip may combine a retrieved fare with a modelled transfer cost. Collapsing
+that into a single weakest label would say an itinerary with a real cached fare
+and a EUR 9 estimated transfer is no better sourced than a guess.
+
+A trip therefore reports:
+
+```text
+fareSourceType        weakest source type across RETRIEVED fares
+fareSources           providers of those fares
+estimatedComponents   which parts are modelled, e.g. access_transfer
+estimateSources       what produced those estimates
+partiallyEstimated    true when any component is modelled
+```
+
+Rules:
+
+- an estimate never overwrites the provenance of a retrieved fare
+- an estimated cost is never attributed to a provider that did not supply it
+- a trip containing an estimate is **partially estimated**, and says which part
+- a user-facing label of just `estimated` loses too much and must not be used
 
 At minimum:
 

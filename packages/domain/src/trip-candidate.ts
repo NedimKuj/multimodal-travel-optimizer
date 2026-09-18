@@ -264,8 +264,14 @@ export type TripCostScope = "complete" | "transport_and_partial_accommodation";
 export interface TripCost {
   /** Sum of selected transport offers for the whole party. */
   readonly transport: Money;
+  /** Transport excluding ground transfers: the fares we retrieved. */
+  readonly fares: Money;
+  /** Ground transfers only, so an estimate is inspectable (spec §28). */
+  readonly groundTransfer: Money;
   /** Sum of stays for the whole party. */
   readonly accommodation: Money;
+  /** The portion of `total` that came from a model rather than a provider. */
+  readonly estimated: Money;
   readonly total: Money;
   /**
    * What `total` covers. Totals of different scopes must not be compared
@@ -279,8 +285,37 @@ export interface TripCost {
   readonly perPersonShares: readonly Money[];
 }
 
+/** A cost we modelled rather than retrieved (ADR 0011). */
+export type EstimatedComponent = "access_transfer" | "other";
+
+/**
+ * Where a trip's numbers came from, by component.
+ *
+ * A single weakest label would say an itinerary with a retrieved fare and a
+ * modelled EUR 9 transfer is no better sourced than a guess. Fares keep their
+ * own provenance; estimates are named separately (ADR 0011).
+ */
+export interface TripProvenance {
+  /** Weakest source type across retrieved fares; undefined when there are none. */
+  readonly fareSourceType: SourceType | undefined;
+  /** Providers of retrieved fares, sorted. */
+  readonly fareSources: readonly string[];
+  /** Which parts of the trip are modelled. */
+  readonly estimatedComponents: readonly EstimatedComponent[];
+  /** Sources of those estimates, sorted. */
+  readonly estimateSources: readonly string[];
+  /** True when any component is estimated. */
+  readonly partiallyEstimated: boolean;
+}
+
 export interface TripSummary {
+  /**
+   * Local date the outbound **fare segment** departs. Access transfers may
+   * start earlier without changing it: the window the traveler gave is about
+   * the journey they booked (docs/optimizer-spec.md §8).
+   */
   readonly departureDate: LocalDate;
+  /** Local date the final return **fare segment** departs. */
   readonly returnDate: LocalDate;
   /** Stay cities in visiting order (consecutive repeats collapsed). */
   readonly destinations: readonly Location[];
@@ -296,20 +331,20 @@ export interface TripSummary {
    */
   readonly uncoveredNights: readonly LocalDate[];
   readonly cost: TripCost;
-  /** Time spent moving: the sum of segment durations. */
+  /** Time spent moving: the sum of segment durations, transfers included. */
   readonly travelTimeMinutes: number;
-  /** First departure to last arrival. */
-  readonly totalDurationMinutes: number;
+  /**
+   * First departure to last arrival across every leg, including transfers:
+   * the physical journey, which may start before `departureDate`.
+   */
+  readonly totalJourneyDurationMinutes: number;
   /** Number of transport segments. */
   readonly legs: number;
   /** Intermediate stops inside segments. */
   readonly stops: number;
   /** Changes between consecutive segments with no stay in between. */
   readonly connections: number;
-  /** The weakest source type of any price in the trip. */
-  readonly sourceType: SourceType;
-  /** Providers of all prices, sorted. */
-  readonly sources: readonly string[];
+  readonly provenance: TripProvenance;
 }
 
 export type SummarizeTripResult =
@@ -321,6 +356,21 @@ export type SummarizeTripResult =
  * Invalid trips have no summary, so an incomplete or inconsistent itinerary
  * can never be shown with a total cost.
  */
+/** An offer is a transfer estimate when every segment it covers is one. */
+function isGroundTransferOffer(
+  offer: { readonly segmentIds: readonly string[] },
+  segmentsById: ReadonlyMap<string, TransportSegment>,
+): boolean {
+  return offer.segmentIds.every(
+    (id) => segmentsById.get(id)?.mode === "ground_transfer",
+  );
+}
+
+/** The last segment the traveler actually booked, ignoring transfers we added. */
+function fareSegments(segments: readonly TransportSegment[]): TransportSegment[] {
+  return segments.filter((segment) => segment.mode !== "ground_transfer");
+}
+
 export function summarizeTrip(trip: TripCandidate): SummarizeTripResult {
   const issues = validateTripCandidate(trip);
   const first = trip.segments[0];
@@ -339,15 +389,38 @@ export function summarizeTrip(trip: TripCandidate): SummarizeTripResult {
     };
   }
 
-  const transport = sumMoney(
-    trip.offers.map((offer) => offerPriceForTravelers(offer, trip.travelers)),
+  const fareLegs = fareSegments(trip.segments);
+  const segmentsById = new Map(trip.segments.map((segment) => [segment.id, segment]));
+  const priced = trip.offers.map((offer) => ({
+    offer,
+    amount: offerPriceForTravelers(offer, trip.travelers),
+    isTransfer: isGroundTransferOffer(offer, segmentsById),
+    isEstimate: offer.provenance.sourceType === "estimated",
+  }));
+
+  const fares = sumMoney(
+    priced.filter((entry) => !entry.isTransfer).map((entry) => entry.amount),
     currency,
   );
+  const groundTransfer = sumMoney(
+    priced.filter((entry) => entry.isTransfer).map((entry) => entry.amount),
+    currency,
+  );
+  const transport = addMoney(fares, groundTransfer);
   const accommodation = sumMoney(
     trip.stays.map((stay) => stay.price),
     currency,
   );
   const total = addMoney(transport, accommodation);
+  const estimated = sumMoney(
+    [
+      ...priced.filter((entry) => entry.isEstimate).map((entry) => entry.amount),
+      ...trip.stays
+        .filter((stay) => stay.provenance.sourceType === "estimated")
+        .map((stay) => stay.price),
+    ],
+    currency,
+  );
 
   const staysInOrder = [...trip.stays].sort((a, b) => compareLocalDates(a.checkIn, b.checkIn));
   const destinations: Location[] = [];
@@ -363,28 +436,59 @@ export function summarizeTrip(trip: TripCandidate): SummarizeTripResult {
     .flatMap(nightsInGap)
     .filter((night) => !nightIsCovered(night, trip.stays));
 
-  const sourceType = weakestSourceType([
-    ...trip.offers.map((offer) => offer.provenance.sourceType),
-    ...trip.stays.map((stay) => stay.provenance.sourceType),
-  ]);
-  if (sourceType === undefined) {
+  // Fares keep their own provenance; estimates are reported separately, so a
+  // retrieved fare is never downgraded by a modelled transfer (ADR 0011).
+  const observed = [
+    ...priced.filter((entry) => !entry.isEstimate),
+    ...trip.stays
+      .filter((stay) => stay.provenance.sourceType !== "estimated")
+      .map((stay) => ({ offer: { provenance: stay.provenance }, isTransfer: false })),
+  ];
+  const estimates = [
+    ...priced.filter((entry) => entry.isEstimate),
+    ...trip.stays
+      .filter((stay) => stay.provenance.sourceType === "estimated")
+      .map((stay) => ({ offer: { provenance: stay.provenance }, isTransfer: false })),
+  ];
+  if (observed.length === 0 && estimates.length === 0) {
     return {
       ok: false,
       issues: [issue("TRIP_WITHOUT_PRICES", "A trip must contain at least one price")],
     };
   }
 
+  const estimatedComponents = [
+    ...new Set(
+      estimates.map((entry): EstimatedComponent =>
+        entry.isTransfer ? "access_transfer" : "other",
+      ),
+    ),
+  ].sort();
+
+  const provenance: TripProvenance = {
+    fareSourceType: weakestSourceType(observed.map((entry) => entry.offer.provenance.sourceType)),
+    fareSources: [...new Set(observed.map((entry) => entry.offer.provenance.provider))].sort(),
+    estimatedComponents,
+    estimateSources: [...new Set(estimates.map((entry) => entry.offer.provenance.provider))].sort(),
+    partiallyEstimated: estimates.length > 0,
+  };
+
   return {
     ok: true,
     summary: {
-      departureDate: localDate(first.departureAt),
-      returnDate: localDate(last.arrivalAt),
+      // The window the traveler gave is about the journey they booked, so
+      // transfers we added do not move these dates (spec §8).
+      departureDate: localDate((fareLegs[0] ?? first).departureAt),
+      returnDate: localDate((fareLegs.at(-1) ?? last).departureAt),
       destinations,
       nights: trip.stays.reduce((nights, stay) => nights + stay.nights, 0),
       uncoveredNights,
       cost: {
         transport,
+        fares,
+        groundTransfer,
         accommodation,
+        estimated,
         total,
         scope:
           uncoveredNights.length === 0 ? "complete" : "transport_and_partial_accommodation",
@@ -394,17 +498,11 @@ export function summarizeTrip(trip: TripCandidate): SummarizeTripResult {
         (minutes, segment) => minutes + segment.durationMinutes,
         0,
       ),
-      totalDurationMinutes: minutesBetween(first.departureAt, last.arrivalAt),
+      totalJourneyDurationMinutes: minutesBetween(first.departureAt, last.arrivalAt),
       legs: trip.segments.length,
       stops: trip.segments.reduce((count, segment) => count + segment.transfers, 0),
       connections,
-      sourceType,
-      sources: [
-        ...new Set([
-          ...trip.offers.map((offer) => offer.provenance.provider),
-          ...trip.stays.map((stay) => stay.provenance.provider),
-        ]),
-      ].sort(),
+      provenance,
     },
   };
 }

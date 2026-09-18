@@ -90,7 +90,10 @@ describe("exploreFlights", () => {
     expect(result.destinations[0]?.candidates[0]?.summary.cost.scope).toBe(
       "transport_and_partial_accommodation",
     );
-    expect(result.destinations[0]?.candidates[0]?.summary.sourceType).toBe("cached");
+    expect(result.destinations[0]?.candidates[0]?.summary.provenance).toMatchObject({
+      fareSourceType: "cached",
+      partiallyEstimated: false,
+    });
   });
 
   it("groups two airports of one city into a single destination", async () => {
