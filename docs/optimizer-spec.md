@@ -409,6 +409,21 @@ PRG → SJJ
 
 The optimizer must not assume that the outbound and return airports are identical.
 
+### The A → B sector
+
+When the optimizer does not insert internal transport, `A → B` is a real part
+of the journey that we have not priced. It is recorded as an **unpriced gap**,
+never as a zero-cost or estimated leg
+(`docs/decisions/0014-unpriced-itinerary-gaps.md`):
+
+- the gap keeps its endpoints, its distance and the reason it is unpriced
+- its cost is **excluded** from the total, and the cost scope says so
+- such an itinerary is never ranked as directly comparable with a fully priced
+  one
+- if `A → B` is itself retrieved as a fare, it is an ordinary offer, not a gap
+
+The invariant: **unknown price is not zero price and is not an estimate.**
+
 ---
 
 ## 11. Multi-City Trips
@@ -422,6 +437,10 @@ SJJ → VIE
 VIE → PRG
 PRG → SJJ
 ```
+
+Multi-city composition is **Phase 3b**: it lands after composed round trips and
+open jaw prove the discovery funnel, call-budget accounting, gap semantics and
+ranking (`docs/implementation-plan.md` §48).
 
 Multi-city candidates are valid when:
 
@@ -560,6 +579,33 @@ Candidate generation should use a funnel:
 
 The exact implementation may evolve, but expensive provider calls should happen as late as reasonably possible.
 
+### Composition from one-way fares
+
+A trip may be composed from independently priced one-way fares rather than a
+single round-trip fare. Composition costs provider calls, so it runs as a
+staged funnel:
+
+```text
+Stage 1  one broad discovery call per departure month (origin -> anywhere)
+Stage 2  return-leg queries for destinations chosen deterministically
+         (cheapest outbound fare, then IATA), while budget remains
+```
+
+Destinations that are never queried are recorded as **skipped, with the
+reason**, so a budget-limited search says so. Provider response order must
+never decide which destinations receive the remaining calls.
+
+### Provider call budget
+
+The number of provider calls per search is capped by an **application-level
+budget** (currently 12). Every optional dimension — alternative origins,
+return-leg enrichment — draws on the same budget, and a query that cannot fit
+is refused or recorded as skipped rather than silently truncated.
+
+This limit is ours, chosen for safety. It is **not** a statement about the
+provider's own rate limits, which remain unverified
+(`docs/provider-compliance.md`).
+
 ### Phase 1 subset
 
 Phase 1 implements steps 1, 2 and 10 only, using provider round-trip fares
@@ -689,6 +735,17 @@ Access transfers are included **wherever they apply** — primary origin,
 destination, or an alternative airport — so two itineraries are always compared
 on the same scope.
 
+A total that excludes something says which:
+
+```text
+complete                      nothing excluded
+excludes_unpriced_segment     an unpriced gap is not in the number
+transport_and_partial_accommodation   nights without accommodation
+```
+
+An amount that excludes a sector is a **known cost**, not a total, and is never
+compared against a complete total as though the two meant the same thing.
+
 ---
 
 ## 20. Accommodation
@@ -735,6 +792,14 @@ fareSources           providers of those fares
 estimatedComponents   which parts are modelled, e.g. access_transfer
 estimateSources       what produced those estimates
 partiallyEstimated    true when any component is modelled
+```
+
+Three states must stay distinct:
+
+```text
+retrieved   a price a provider gave us (cached | recent | live)
+estimated   a price we modelled, labelled as such (e.g. airport access)
+unpriced    a sector we have no source for; excluded from the total
 ```
 
 Rules:

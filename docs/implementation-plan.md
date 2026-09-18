@@ -2070,14 +2070,44 @@ These are different things and are budgeted differently:
 
 ## Phase 3 — Open-jaw
 
-Implement:
+Implement, from **independently priced one-way fares**:
 
 ```text
-SJJ → A → SJJ
-SJJ → A → B → SJJ
+SJJ → A → SJJ          composed round trip
 SJJ → A
-B → SJJ
+B → SJJ                open jaw, with A → B as an unpriced gap
 ```
+
+Deferred to **Phase 3b**:
+
+```text
+SJJ → A → B → SJJ      multi-city
+SJJ → A → B
+C → SJJ
+```
+
+Phase 3 is done when composed round trips and open jaws are deterministic,
+budget-bounded, correctly costed, connection-valid, and clearly distinguish a
+complete cost from a known cost that excludes an unpriced sector.
+
+### Two-stage funnel and the call budget
+
+```text
+Stage 1   one discovery call per departure month (SJJ → anywhere, one-way)
+Stage 2   return-leg queries for destinations chosen deterministically
+          (cheapest outbound fare, then IATA), spending only what remains
+```
+
+`providerCalls <= 12` is an invariant for the whole search, shared with
+alternative-origin expansion. Destinations skipped for budget are recorded with
+their reason. The 12 is **our application-level safety budget**, not the
+provider's quota, which is still unverified
+(`docs/provider-compliance.md`).
+
+Measured 2026-09-18: one discovery call returns 51 destinations from SJJ, but
+return legs are sparse — of the eight cheapest destinations, three (ROM, DTM,
+FRA) had no January return fares at all. Composition must show that, not hide
+it.
 
 ---
 
