@@ -157,7 +157,10 @@ export async function run(
       geography: referenceData.geography,
       airports: referenceData.airports,
     },
-    { currency: options.currency },
+    {
+      currency: options.currency,
+      strategy: options.compose ? "composed" : "provider_round_trips",
+    },
   );
 
   io.stdout(

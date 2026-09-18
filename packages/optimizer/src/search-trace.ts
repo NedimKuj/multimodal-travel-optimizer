@@ -66,6 +66,7 @@ export interface SearchTrace {
   readonly fingerprint: string;
   readonly optimizerVersion: string;
   readonly status: "ok" | "partial" | "failed";
+  readonly strategy: SearchStrategy;
   readonly request: SearchRequest;
   readonly currency: CurrencyCode;
   readonly window?: TravelWindow;
@@ -105,8 +106,19 @@ export function searchFingerprint(
   return createHash("sha256").update(canonical).digest("hex");
 }
 
+/**
+ * How candidates are discovered.
+ *
+ * `provider_round_trips` uses the provider's own round-trip fares: fewer calls,
+ * always complete, but narrower (ADR 0008). `composed` builds itineraries from
+ * one-way fares: far more destinations, and the only way to reach an open jaw.
+ */
+export type SearchStrategy = "provider_round_trips" | "composed";
+
 export interface RunSearchOptions {
   readonly currency: CurrencyCode;
+  /** Defaults to `composed` when the request allows an open jaw. */
+  readonly strategy?: SearchStrategy;
   readonly signal?: AbortSignal;
   /** Injected for reproducible tests. */
   readonly now?: () => Date;
@@ -133,9 +145,12 @@ export async function runFlightSearch(
   } = options;
 
   const startedAt = parseUtcInstant(now().toISOString());
-  // Open jaw needs one-way fares; without it, provider round trips are both
-  // cheaper in calls and already complete (ADR 0008).
-  const exploration = request.allowOpenJaw
+  // Open jaw needs one-way fares, so it implies composition; composition is
+  // also useful on its own, for the destinations round-trip fares never reach.
+  const strategy: SearchStrategy =
+    options.strategy ?? (request.allowOpenJaw ? "composed" : "provider_round_trips");
+  const exploration =
+    strategy === "composed"
     ? await exploreComposedItineraries(request, deps, {
         currency,
         ...(options.signal !== undefined && { signal: options.signal }),
@@ -160,6 +175,7 @@ export async function runFlightSearch(
     fingerprint: searchFingerprint(request, currency, optimizerVersion),
     optimizerVersion,
     status: exploration.status,
+    strategy,
     request,
     currency,
     ...(exploration.window !== undefined && { window: exploration.window }),

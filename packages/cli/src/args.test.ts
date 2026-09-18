@@ -50,6 +50,7 @@ describe("parseArguments", () => {
       currency: "EUR",
       alternativeAirports: false,
       openJaw: false,
+      compose: false,
       limit: 10,
       json: false,
     });
@@ -58,6 +59,14 @@ describe("parseArguments", () => {
   it("keeps open jaw off unless asked", () => {
     expect(parsed(base).openJaw).toBe(false);
     expect(parsed([...base, "--open-jaw"]).openJaw).toBe(true);
+  });
+
+  it("composes from one-way fares on request, and always for an open jaw", () => {
+    expect(parsed(base).compose).toBe(false);
+    expect(parsed([...base, "--compose"]).compose).toBe(true);
+    // An open jaw can only be built from one-way fares.
+    expect(parsed([...base, "--open-jaw"]).compose).toBe(true);
+    expect(parsed([...base, "--compose"]).openJaw).toBe(false);
   });
 
   it("keeps alternative airports off unless asked", () => {
@@ -74,6 +83,7 @@ describe("parseArguments", () => {
       currency: "EUR",
       alternativeAirports: false,
       openJaw: false,
+      compose: false,
       limit: 10,
       json: false,
     });

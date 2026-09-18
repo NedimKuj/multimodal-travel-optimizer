@@ -277,3 +277,61 @@ describe("temporal sanity", () => {
     expect(result.destinations).toEqual([]);
   });
 });
+
+describe("composition without open jaw", () => {
+  it("still composes round trips from one-way fares", async () => {
+    // Pattern 1 is useful on its own: one-way discovery reaches destinations
+    // the provider's round-trip fares never return.
+    const result = await exploreComposedItineraries(
+      request({ allowOpenJaw: false }),
+      deps(
+        provider([outboundLeg("out-cia", CIA, 4000)], { CIA: [returnLeg("back-cia", CIA, 3000)] }),
+      ),
+      options,
+    );
+    const candidate = result.destinations[0]?.candidates[0];
+    expect(candidate).toBeDefined();
+    expect(candidate?.candidate.offers).toHaveLength(2);
+    expect(candidate?.summary.unpricedGaps).toEqual([]);
+  });
+});
+
+describe("gaps are declared against the order the traveller travels", () => {
+  it("rejects a pairing whose legs would reorder, rather than orphaning its gap", async () => {
+    // FCO arrival is after the CIA departure, so sorting by departure would
+    // flip the legs and leave the declared gap dangling.
+    const lateOutbound = {
+      segments: [
+        segment({
+          id: "late-out",
+          origin: SJJ,
+          destination: FCO,
+          departure: "2027-01-01T10:00+01:00",
+          arrival: "2027-01-01T11:30+01:00",
+        }),
+      ],
+      offers: [offer("late-out-fare", ["late-out"], 4000)],
+    };
+    const earlyHome = {
+      segments: [
+        segment({
+          id: "early-home",
+          origin: CIA,
+          destination: SJJ,
+          departure: "2026-12-28T18:00+01:00",
+          arrival: "2026-12-28T20:30+01:00",
+        }),
+      ],
+      offers: [offer("early-home-fare", ["early-home"], 3000)],
+    };
+    const result = await exploreComposedItineraries(
+      request({ allowOpenJaw: true }),
+      // CIA must also be a discovered destination for its return to be queried.
+      deps(provider([lateOutbound, outboundLeg("out-cia", CIA, 4200)], { CIA: [earlyHome] })),
+      options,
+    );
+    expect(result.counts.rejectedReturnBeforeArrival).toBeGreaterThan(0);
+    expect(result.counts.rejectedInvalid).toBe(0);
+    expect(result.issues.map((issue) => issue.code)).not.toContain("INVALID_CANDIDATE");
+  });
+});

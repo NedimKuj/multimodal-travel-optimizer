@@ -38,9 +38,13 @@ return dates, each with `±flex` tolerance.
 `--budget` is **per person by default**; pass `--budget-basis total` for a whole
 trip budget. The CLI prints back which one it used.
 
-`--open-jaw` allows flying home from a different city. It switches discovery to
-**one-way fares**, which reach far more destinations (51 against 15, measured
-2026-09-18) and are the only way to build an open jaw. The sector between the
+`--compose` builds trips from **one-way fares** instead of the provider's
+round-trip fares. That reaches far more destinations (51 against 15, measured
+2026-09-18) at the cost of more provider calls, and it works on its own: a
+composed round trip flies out and home from the same city.
+
+`--open-jaw` allows flying home from a *different* city, and implies
+`--compose`, since an open jaw can only be built from one-way fares. The sector between the
 two cities is **not priced** — no licensed rail or bus source exists
 (`docs/provider-compliance.md`) — so it is shown as a gap, excluded from the
 amount, and the output says so:
@@ -102,8 +106,8 @@ problem, `2` the provider failed outright.
 
 ## How a search spends its calls
 
-With `--open-jaw`, the search runs a two-stage funnel inside a hard budget of
-**12 provider calls**:
+With `--compose` (and therefore with `--open-jaw`), the search runs a two-stage
+funnel inside a hard budget of **12 provider calls**:
 
 ```text
 Stage 1   one call per departure month: origin → anywhere, one-way

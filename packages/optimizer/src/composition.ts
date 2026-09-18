@@ -149,7 +149,8 @@ export function composeItineraries(input: ComposeInput): CompositionResult {
 
   const attempts: CandidateAttempt[] = [];
   const issues: { code: string; message: string }[] = [];
-  const counts: Record<string, number> = {
+  // Typed against the counter names, so a typo cannot quietly vanish.
+  const counts: Partial<Record<keyof ExplorationCounts, number>> = {
     rejectedInfeasible: 0,
     rejectedInvalid: 0,
     rejectedOutsideWindow: 0,
@@ -157,7 +158,6 @@ export function composeItineraries(input: ComposeInput): CompositionResult {
     rejectedBudget: 0,
     rejectedGapTooFar: 0,
     rejectedReturnBeforeArrival: 0,
-    destinationsWithoutReturn: 0,
   };
 
   const record = (outcome: ReturnType<typeof assembleCandidate>): void => {
@@ -176,10 +176,9 @@ export function composeItineraries(input: ComposeInput): CompositionResult {
     if (sample === undefined) continue;
     const arrival = sample.segment.destination;
 
+    // Destinations with no way home are counted from the discovery record,
+    // which knows about every destination, not just the ones reached here.
     const departureAirports = [...returnByAirport.keys()].sort();
-    if (!departureAirports.includes(arrivalId) && departureAirports.length === 0) {
-      counts["destinationsWithoutReturn"] = (counts["destinationsWithoutReturn"] ?? 0) + 1;
-    }
 
     for (const outbound of outbounds) {
       for (const departureId of departureAirports) {
@@ -195,7 +194,7 @@ export function composeItineraries(input: ComposeInput): CompositionResult {
           if (!input.request.allowOpenJaw) continue;
           const gap = gapBetween(arrival, departurePoint, geography);
           if (gap.distanceKm === undefined || gap.distanceKm > config.maxUnpricedGapKm) {
-            counts["rejectedGapTooFar"] = (counts["rejectedGapTooFar"] ?? 0) + 1;
+            counts.rejectedGapTooFar = (counts.rejectedGapTooFar ?? 0) + 1;
             continue;
           }
           gaps = [gap];
@@ -206,8 +205,7 @@ export function composeItineraries(input: ComposeInput): CompositionResult {
           if (
             compareZonedTimestamps(homeward.segment.departureAt, outbound.segment.arrivalAt) <= 0
           ) {
-            counts["rejectedReturnBeforeArrival"] =
-              (counts["rejectedReturnBeforeArrival"] ?? 0) + 1;
+            counts.rejectedReturnBeforeArrival = (counts.rejectedReturnBeforeArrival ?? 0) + 1;
             continue;
           }
           record(
