@@ -1,10 +1,11 @@
-import type {
-  AirportGeography,
-  ItineraryGap,
-  Location,
-  SearchRequest,
-  TransportOffer,
-  TransportSegment,
+import {
+  compareZonedTimestamps,
+  type AirportGeography,
+  type ItineraryGap,
+  type Location,
+  type SearchRequest,
+  type TransportOffer,
+  type TransportSegment,
 } from "@travel-optimizer/domain";
 
 import type { DiscoveryResult } from "./discovery.js";
@@ -155,6 +156,7 @@ export function composeItineraries(input: ComposeInput): CompositionResult {
     rejectedNights: 0,
     rejectedBudget: 0,
     rejectedGapTooFar: 0,
+    rejectedReturnBeforeArrival: 0,
     destinationsWithoutReturn: 0,
   };
 
@@ -200,6 +202,14 @@ export function composeItineraries(input: ComposeInput): CompositionResult {
         }
 
         for (const homeward of returns) {
+          // A way home that leaves before the outbound lands is not a trip.
+          if (
+            compareZonedTimestamps(homeward.segment.departureAt, outbound.segment.arrivalAt) <= 0
+          ) {
+            counts["rejectedReturnBeforeArrival"] =
+              (counts["rejectedReturnBeforeArrival"] ?? 0) + 1;
+            continue;
+          }
           record(
             assembleCandidate({
               id: `trip:${outbound.offer.id}+${homeward.offer.id}`,

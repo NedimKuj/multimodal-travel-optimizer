@@ -56,6 +56,7 @@ export async function exploreComposedItineraries(
     rejectedNights: 0,
     rejectedBudget: 0,
     rejectedGapTooFar: 0,
+    rejectedReturnBeforeArrival: 0,
     destinationsWithoutReturn: 0,
     destinations: 0,
   };

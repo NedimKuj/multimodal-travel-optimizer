@@ -84,6 +84,8 @@ export interface ExplorationCounts {
   readonly rejectedBudget: number;
   /** Open-jaw pairings whose unpriced sector was too far to be plausible. */
   readonly rejectedGapTooFar: number;
+  /** Pairings where the way home leaves before the outbound arrives. */
+  readonly rejectedReturnBeforeArrival: number;
   /** Destinations reached but with no retrieved way home. */
   readonly destinationsWithoutReturn: number;
   readonly destinations: number;
@@ -141,6 +143,7 @@ const emptyCounts: ExplorationCounts = {
   rejectedNights: 0,
   rejectedBudget: 0,
   rejectedGapTooFar: 0,
+  rejectedReturnBeforeArrival: 0,
   destinationsWithoutReturn: 0,
   destinations: 0,
 };

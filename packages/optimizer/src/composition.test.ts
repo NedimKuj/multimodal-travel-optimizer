@@ -252,3 +252,28 @@ describe("determinism", () => {
     expect(ids(first).length).toBeGreaterThan(1);
   });
 });
+
+describe("temporal sanity", () => {
+  it("never pairs a way home that leaves before the outbound lands", async () => {
+    // The return departs a week before the outbound arrives.
+    const earlyReturn = {
+      segments: [
+        segment({
+          id: "back-too-early",
+          origin: CIA,
+          destination: SJJ,
+          departure: "2026-12-25T18:00+01:00",
+          arrival: "2026-12-25T20:30+01:00",
+        }),
+      ],
+      offers: [offer("back-too-early-fare", ["back-too-early"], 3000)],
+    };
+    const result = await exploreComposedItineraries(
+      request({ allowOpenJaw: true }),
+      deps(provider([outboundLeg("out-cia", CIA, 4000)], { CIA: [earlyReturn] })),
+      options,
+    );
+    expect(result.counts.rejectedReturnBeforeArrival).toBe(1);
+    expect(result.destinations).toEqual([]);
+  });
+});

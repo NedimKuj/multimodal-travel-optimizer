@@ -233,6 +233,9 @@ export function formatSearch(trace: SearchTrace, options: FormatOptions): string
     counts.rejectedGapTooFar > 0
       ? `${String(counts.rejectedGapTooFar)} open jaws too far apart`
       : "",
+    counts.rejectedReturnBeforeArrival > 0
+      ? `${String(counts.rejectedReturnBeforeArrival)} return before arrival`
+      : "",
     counts.rejectedInvalid > 0 ? `${String(counts.rejectedInvalid)} unusable` : "",
   ].filter((entry) => entry !== "");
   if (rejected.length > 0) lines.push(`Filtered out: ${rejected.join(" · ")}`);
