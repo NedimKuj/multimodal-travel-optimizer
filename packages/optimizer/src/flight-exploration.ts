@@ -18,6 +18,7 @@ import {
   type SearchRequest,
   type TransportOffer,
   type TransportSegment,
+  type ItineraryGap,
   type TripCandidate,
   type TripSummary,
 } from "@travel-optimizer/domain";
@@ -61,8 +62,10 @@ export interface RankedCandidate {
 }
 
 export interface DestinationResult {
-  /** The destination city, when the reference data resolves one. */
+  /** The first destination city, when the reference data resolves one. */
   readonly city: Location | undefined;
+  /** Every city visited, in order: one for a round trip, two for an open jaw. */
+  readonly cities: readonly Location[];
   /** Destination airports behind this city, in first-seen order. */
   readonly airports: readonly Location[];
   /** Candidates for this destination, cheapest first. */
@@ -79,12 +82,25 @@ export interface ExplorationCounts {
   readonly rejectedOutsideWindow: number;
   readonly rejectedNights: number;
   readonly rejectedBudget: number;
+  /** Open-jaw pairings whose unpriced sector was too far to be plausible. */
+  readonly rejectedGapTooFar: number;
+  /** Destinations reached but with no retrieved way home. */
+  readonly destinationsWithoutReturn: number;
   readonly destinations: number;
+}
+
+export interface DiscoveryRecord {
+  readonly enriched: readonly { readonly airport: Location; readonly returnOffersFound: number }[];
+  readonly skipped: readonly { readonly airport: Location; readonly reason: string }[];
+  readonly callsPlanned: number;
+  readonly callBudget: number;
 }
 
 export interface FlightExplorationResult {
   readonly status: "ok" | "partial" | "failed";
   readonly window?: TravelWindow;
+  /** Present when the search composed itineraries from one-way fares. */
+  readonly discovery?: DiscoveryRecord;
   /** Which origins were queried, and which were skipped and why. */
   readonly origins?: OriginExpansion;
   readonly destinations: readonly DestinationResult[];
@@ -124,6 +140,8 @@ const emptyCounts: ExplorationCounts = {
   rejectedOutsideWindow: 0,
   rejectedNights: 0,
   rejectedBudget: 0,
+  rejectedGapTooFar: 0,
+  destinationsWithoutReturn: 0,
   destinations: 0,
 };
 
@@ -185,7 +203,8 @@ export interface CandidateAttempt {
   readonly candidate: TripCandidate;
   readonly summary: TripSummary;
   readonly nights: number;
-  readonly destinationAirport: Location;
+  /** Airports the traveler visits, in order: one for a round trip, two for an open jaw. */
+  readonly destinationAirports: readonly Location[];
 }
 
 export type AttemptOutcome =
@@ -353,6 +372,38 @@ function buildCandidate(
     return { ok: false, counter: "rejectedNotRoundTrip" };
   }
 
+  return assembleCandidate({
+    id: `trip:${offer.id}`,
+    outbound,
+    inbound,
+    offers: [offer],
+    gaps: [],
+    request,
+    window,
+    context,
+  });
+}
+
+export interface AssembleCandidateInput {
+  readonly id: string;
+  readonly outbound: TransportSegment;
+  readonly inbound: TransportSegment;
+  readonly offers: readonly TransportOffer[];
+  /** Sectors the traveler arranges themselves (ADR 0014). */
+  readonly gaps: readonly ItineraryGap[];
+  readonly request: SearchRequest;
+  readonly window: TravelWindow;
+  readonly context: CandidateContext;
+}
+
+/**
+ * Finishes a candidate: access transfers, feasibility, window, nights, budget.
+ *
+ * Shared by provider round trips and itineraries composed from one-way fares,
+ * so both are judged by exactly the same rules.
+ */
+export function assembleCandidate(input: AssembleCandidateInput): AttemptOutcome {
+  const { outbound, inbound, request, window, context } = input;
   const access = buildAccessTransfers(outbound, inbound, request, context);
   const originAccess = buildOriginTransfers(outbound, inbound, request, context);
   const allSegments = [outbound, inbound, ...access.segments, ...originAccess.segments].sort((a, b) =>
@@ -365,7 +416,7 @@ function buildCandidate(
   const first = allSegments[0];
   if (first === undefined) return { ok: false, counter: "rejectedInvalid" };
 
-  const feasibility = validateConnections(allSegments, context.connectionRules);
+  const feasibility = validateConnections(allSegments, context.connectionRules, input.gaps);
   if (!feasibility.ok) {
     return {
       ok: false,
@@ -378,14 +429,13 @@ function buildCandidate(
   }
 
   const candidate: TripCandidate = {
-    id: `trip:${offer.id}`,
+    id: input.id,
     origin: first.origin,
     travelers: request.travelers,
     segments: allSegments,
-    offers: [offer, ...access.offers, ...originAccess.offers],
+    offers: [...input.offers, ...access.offers, ...originAccess.offers],
     stays: [],
-    // A provider round trip has no unpriced sector: it returns where it left.
-    gaps: [],
+    gaps: [...input.gaps],
   };
 
   const summarized = summarizeTrip(candidate);
@@ -440,12 +490,28 @@ function buildCandidate(
       candidate,
       summary: summarized.summary,
       nights: evaluation.nights,
-      destinationAirport: outbound.destination,
+      destinationAirports:
+        outbound.destination.id === inbound.origin.id
+          ? [outbound.destination]
+          : [outbound.destination, inbound.origin],
     },
   };
 }
 
+/** 0 for a complete amount, 1 for one that excludes an unpriced sector. */
+function comparisonClass(candidate: RankedCandidate): number {
+  return candidate.summary.cost.exclusions.includes("unpriced_segment") ? 1 : 0;
+}
+
+/**
+ * Orders candidates, completely priced ones first.
+ *
+ * A known cost that excludes a sector is never compared against a full total:
+ * doing so would reward an itinerary for the part it leaves out (ADR 0014).
+ */
 export function compareCandidates(a: RankedCandidate, b: RankedCandidate): number {
+  const byClass = comparisonClass(a) - comparisonClass(b);
+  if (byClass !== 0) return byClass;
   const byCost = compareMoney(a.summary.cost.total, b.summary.cost.total);
   if (byCost !== 0) return byCost;
   const byTime = a.summary.travelTimeMinutes - b.summary.travelTimeMinutes;
@@ -460,7 +526,7 @@ export function groupByDestination(
   issues: DomainIssue[],
 ): DestinationResult[] {
   interface Group {
-    city: Location | undefined;
+    cities: Location[];
     airports: Location[];
     candidates: RankedCandidate[];
   }
@@ -468,23 +534,31 @@ export function groupByDestination(
   const reportedAirports = new Set<string>();
 
   for (const attempt of attempts) {
-    const lookup = lookupCityForAirport(cities, attempt.destinationAirport);
-    if (!lookup.ok && !reportedAirports.has(attempt.destinationAirport.id)) {
-      reportedAirports.add(attempt.destinationAirport.id);
-      issues.push(lookup.issue);
-    }
-    // An unresolvable city falls back to the airport as its own destination;
-    // no city is invented.
-    const city = lookup.ok ? lookup.city : undefined;
-    const key = city?.id ?? attempt.destinationAirport.id;
+    // An open jaw visits two places; a round trip one. The destination is the
+    // whole sequence, so "Vienna → Prague" is its own entry.
+    const visited = attempt.destinationAirports.map((airport) => {
+      const lookup = lookupCityForAirport(cities, airport);
+      if (!lookup.ok && !reportedAirports.has(airport.id)) {
+        reportedAirports.add(airport.id);
+        issues.push(lookup.issue);
+      }
+      // An unresolvable city falls back to the airport; no city is invented.
+      return { airport, city: lookup.ok ? lookup.city : undefined };
+    });
+    const key = visited.map((entry) => entry.city?.id ?? entry.airport.id).join(">");
 
     let group = groups.get(key);
     if (group === undefined) {
-      group = { city, airports: [], candidates: [] };
+      group = { cities: [], airports: [], candidates: [] };
       groups.set(key, group);
     }
-    if (!group.airports.some((airport) => airport.id === attempt.destinationAirport.id)) {
-      group.airports.push(attempt.destinationAirport);
+    for (const entry of visited) {
+      if (entry.city !== undefined && !group.cities.some((city) => city.id === entry.city?.id)) {
+        group.cities.push(entry.city);
+      }
+      if (!group.airports.some((airport) => airport.id === entry.airport.id)) {
+        group.airports.push(entry.airport);
+      }
     }
     group.candidates.push({
       candidate: attempt.candidate,
@@ -494,7 +568,8 @@ export function groupByDestination(
   }
 
   const destinations = [...groups.values()].map((group) => ({
-    city: group.city,
+    city: group.cities[0],
+    cities: group.cities,
     airports: group.airports,
     candidates: [...group.candidates].sort(compareCandidates),
   }));

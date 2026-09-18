@@ -120,9 +120,16 @@ export type ConnectionValidation =
  * A gap longer than `maxConnectionGapMinutes` is treated as time on the
  * ground, not a connection, and is left to the nights and accommodation rules.
  */
+export interface GapLike {
+  readonly from: { readonly id: string };
+  readonly to: { readonly id: string };
+}
+
 export function validateConnections(
   segments: readonly TransportSegment[],
   rules: ConnectionRules = DEFAULT_CONNECTION_RULES,
+  /** Sectors the traveler arranges themselves; not connections (ADR 0014). */
+  gaps: readonly GapLike[] = [],
 ): ConnectionValidation {
   const issues: DomainIssue[] = [];
   const connections: ConnectionCheck[] = [];
@@ -131,6 +138,13 @@ export function validateConnections(
     const previous = segments[index - 1];
     const next = segments[index];
     if (previous === undefined || next === undefined) continue;
+
+    // Crossing a gap is not a connection: the traveler makes their own way,
+    // on their own schedule, so minimum connection times do not apply.
+    const bridgedByGap = gaps.some(
+      (gap) => gap.from.id === previous.destination.id && gap.to.id === next.origin.id,
+    );
+    if (bridgedByGap) continue;
 
     const availableMinutes = minutesBetween(previous.arrivalAt, next.departureAt);
     if (availableMinutes > rules.maxConnectionGapMinutes) continue;

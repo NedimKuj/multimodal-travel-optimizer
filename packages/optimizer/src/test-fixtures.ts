@@ -69,6 +69,10 @@ export const FIXTURE_DISTANCES_KM: Record<string, number> = {
   [`${CIA.id}->${ROME.id}`]: 15,
   [`${SAW.id}->${ISTANBUL.id}`]: 40,
   [`${SJJ.id}->${TZL.id}`]: 71,
+  // Airport to airport, for open-jaw gaps.
+  [`${FCO.id}->${CIA.id}`]: 30,
+  [`${FCO.id}->${SAW.id}`]: 1400,
+  [`${CIA.id}->${SAW.id}`]: 1400,
 };
 
 export const fixtureGeography: AirportGeography = {

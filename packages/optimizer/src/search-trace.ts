@@ -11,9 +11,11 @@ import {
   type UtcInstant,
 } from "@travel-optimizer/domain";
 
+import { exploreComposedItineraries } from "./composed-search.js";
 import {
   exploreFlights,
   type DestinationResult,
+  type DiscoveryRecord,
   type ExplorationCounts,
   type FlightExplorationDeps,
 } from "./flight-exploration.js";
@@ -67,6 +69,8 @@ export interface SearchTrace {
   readonly request: SearchRequest;
   readonly currency: CurrencyCode;
   readonly window?: TravelWindow;
+  /** Present when the search composed itineraries from one-way fares. */
+  readonly discovery?: DiscoveryRecord;
   /** Origins queried and alternatives skipped, with reasons (ADR 0013). */
   readonly origins?: OriginExpansionRecord;
   readonly startedAt: UtcInstant;
@@ -129,10 +133,19 @@ export async function runFlightSearch(
   } = options;
 
   const startedAt = parseUtcInstant(now().toISOString());
-  const exploration = await exploreFlights(request, deps, {
-    currency,
-    ...(options.signal !== undefined && { signal: options.signal }),
-  });
+  // Open jaw needs one-way fares; without it, provider round trips are both
+  // cheaper in calls and already complete (ADR 0008).
+  const exploration = request.allowOpenJaw
+    ? await exploreComposedItineraries(request, deps, {
+        currency,
+        ...(options.signal !== undefined && { signal: options.signal }),
+        ...(options.now !== undefined && { now: options.now }),
+      })
+    : await exploreFlights(request, deps, {
+        currency,
+        ...(options.signal !== undefined && { signal: options.signal }),
+        ...(options.now !== undefined && { now: options.now }),
+      });
   const flightsCompletedAt = parseUtcInstant(now().toISOString());
   const completedAt = parseUtcInstant(now().toISOString());
 
@@ -150,6 +163,7 @@ export async function runFlightSearch(
     request,
     currency,
     ...(exploration.window !== undefined && { window: exploration.window }),
+    ...(exploration.discovery !== undefined && { discovery: exploration.discovery }),
     ...(exploration.origins !== undefined && { origins: exploration.origins }),
     startedAt,
     completedAt,

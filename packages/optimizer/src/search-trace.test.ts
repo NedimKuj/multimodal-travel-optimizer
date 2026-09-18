@@ -101,7 +101,8 @@ describe("runFlightSearch", () => {
   it("times the run", async () => {
     const result = await trace();
     expect(result.startedAt).toBe("2026-09-18T09:00:00.000Z");
-    expect(result.completedAt).toBe("2026-09-18T09:00:02.000Z");
+    // The clock also stamps the estimates the exploration produces.
+    expect(result.completedAt).toBe("2026-09-18T09:00:03.000Z");
   });
 
   it("keeps the trace when the search fails", async () => {

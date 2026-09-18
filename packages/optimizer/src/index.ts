@@ -1,3 +1,5 @@
+export * from "./composed-search.js";
+export * from "./composition.js";
 export * from "./connection-rules.js";
 export {
   DEFAULT_CALL_BUDGET,
