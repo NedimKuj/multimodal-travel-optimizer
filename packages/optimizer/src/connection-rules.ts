@@ -2,6 +2,7 @@ import {
   minutesBetween,
   type DomainIssue,
   type Location,
+  type TransportMode,
   type TransportSegment,
 } from "@travel-optimizer/domain";
 
@@ -16,6 +17,16 @@ import {
 
 export interface ConnectionRules {
   readonly airportToAirportMinutes: number;
+  /**
+   * Leaving a flight to board a ground transfer at the same place: deplaning
+   * and bags, not a new check-in.
+   */
+  readonly transferAfterArrivalMinutes: number;
+  /**
+   * Arriving by ground transfer and boarding a flight: the airport's check-in
+   * requirement still applies.
+   */
+  readonly boardingAfterTransferMinutes: number;
   readonly airportToStationMinutes: number;
   readonly sameStationMinutes: number;
   readonly stationToStationMinutes: number;
@@ -29,6 +40,8 @@ export interface ConnectionRules {
 /** Spec §12's initial values. Configurable, not immutable. */
 export const DEFAULT_CONNECTION_RULES: ConnectionRules = {
   airportToAirportMinutes: 120,
+  transferAfterArrivalMinutes: 45,
+  boardingAfterTransferMinutes: 120,
   airportToStationMinutes: 150,
   sameStationMinutes: 15,
   stationToStationMinutes: 30,
@@ -44,14 +57,35 @@ export type RequiredConnection =
   | { readonly ok: true; readonly minutes: number }
   | { readonly ok: false; readonly reason: string };
 
-/** Minimum minutes a traveler needs between arriving at `from` and leaving `to`. */
+export interface ConnectionModes {
+  /** Mode of the segment arriving at the connection. */
+  readonly arrivingBy?: TransportMode;
+  /** Mode of the segment leaving it. */
+  readonly departingBy?: TransportMode;
+}
+
+/**
+ * Minimum minutes a traveler needs between arriving at `from` and leaving `to`.
+ *
+ * Modes matter where they change what the traveler does: stepping off a flight
+ * onto a bus is not the same as connecting between two separately booked
+ * flights, and boarding a flight after a bus still means checking in.
+ */
 export function requiredConnectionMinutes(
   from: Location,
   to: Location,
   rules: ConnectionRules = DEFAULT_CONNECTION_RULES,
+  modes: ConnectionModes = {},
 ): RequiredConnection {
   const fromClass = nodeClass(from);
   const toClass = nodeClass(to);
+
+  if (modes.arrivingBy === "flight" && modes.departingBy === "ground_transfer") {
+    return { ok: true, minutes: rules.transferAfterArrivalMinutes };
+  }
+  if (modes.arrivingBy === "ground_transfer" && modes.departingBy === "flight") {
+    return { ok: true, minutes: rules.boardingAfterTransferMinutes };
+  }
 
   if (fromClass === "airport" && toClass === "airport") {
     return { ok: true, minutes: rules.airportToAirportMinutes };
@@ -101,7 +135,10 @@ export function validateConnections(
     const availableMinutes = minutesBetween(previous.arrivalAt, next.departureAt);
     if (availableMinutes > rules.maxConnectionGapMinutes) continue;
 
-    const required = requiredConnectionMinutes(previous.destination, next.origin, rules);
+    const required = requiredConnectionMinutes(previous.destination, next.origin, rules, {
+      arrivingBy: previous.mode,
+      departingBy: next.mode,
+    });
     if (!required.ok) {
       issues.push({
         code: "UNCLASSIFIED_CONNECTION",

@@ -55,6 +55,24 @@ describe("requiredConnectionMinutes", () => {
     expect(requiredConnectionMinutes(rome, ROMA_TERMINI)).toEqual({ ok: true, minutes: 30 });
   });
 
+  it("treats stepping off a flight onto a transfer as deplaning, not a check-in", () => {
+    expect(
+      requiredConnectionMinutes(FCO, FCO, DEFAULT_CONNECTION_RULES, {
+        arrivingBy: "flight",
+        departingBy: "ground_transfer",
+      }),
+    ).toEqual({ ok: true, minutes: 45 });
+  });
+
+  it("still requires check-in time when a transfer feeds a flight", () => {
+    expect(
+      requiredConnectionMinutes(FCO, FCO, DEFAULT_CONNECTION_RULES, {
+        arrivingBy: "ground_transfer",
+        departingBy: "flight",
+      }),
+    ).toEqual({ ok: true, minutes: 120 });
+  });
+
   it("honours a tightened configuration", () => {
     const rules = { ...DEFAULT_CONNECTION_RULES, airportToAirportMinutes: 90 };
     expect(requiredConnectionMinutes(FCO, SAW, rules)).toEqual({ ok: true, minutes: 90 });

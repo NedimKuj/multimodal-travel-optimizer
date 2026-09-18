@@ -52,6 +52,19 @@ between. A long gap at a destination is a stay, not a connection: it is
 governed by nights and accommodation, not by minimum connection time. The
 threshold between the two is configurable.
 
+### 3b. Modes matter where they change what the traveler does
+
+Node type alone is not enough once transfers are segments. Stepping off a
+flight onto a waiting bus is deplaning and bags, not a new check-in, while
+arriving by bus and boarding a flight still means checking in:
+
+```text
+flight   -> ground transfer (same place):   45   (deplaning, bags)
+ground transfer -> flight  (same place):   120   (the airport's check-in)
+```
+
+Everything else stays on the node-type table above.
+
 ### 4. A transfer we schedule uses the same rules
 
 When the optimizer inserts an access transfer it takes its buffer **from these
