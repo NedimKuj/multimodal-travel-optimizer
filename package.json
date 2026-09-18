@@ -13,7 +13,8 @@
     "lint": "eslint .",
     "test": "vitest run",
     "build": "pnpm -r build",
-    "geo:fetch": "pnpm --filter @travel-optimizer/geo build && pnpm --filter @travel-optimizer/geo fetch:airports"
+    "geo:fetch": "pnpm --filter @travel-optimizer/geo build && pnpm --filter @travel-optimizer/geo fetch:airports",
+    "aviasales:probe": "pnpm --filter @travel-optimizer/providers build && node --env-file-if-exists=.env packages/providers/dist/bin/aviasales-probe.js"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
