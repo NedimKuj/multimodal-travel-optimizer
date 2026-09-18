@@ -181,18 +181,18 @@ function buildQuery(
   };
 }
 
-interface CandidateAttempt {
+export interface CandidateAttempt {
   readonly candidate: TripCandidate;
   readonly summary: TripSummary;
   readonly nights: number;
   readonly destinationAirport: Location;
 }
 
-type AttemptOutcome =
+export type AttemptOutcome =
   | { readonly ok: true; readonly attempt: CandidateAttempt }
   | { readonly ok: false; readonly counter: keyof ExplorationCounts; readonly issue?: DomainIssue };
 
-interface CandidateContext {
+export interface CandidateContext {
   readonly requestedOrigin: Location;
   readonly cities: CityRepository;
   readonly geography: AirportGeography;
@@ -201,7 +201,7 @@ interface CandidateContext {
   readonly fetchedAt: ReturnType<typeof parseUtcInstant>;
 }
 
-interface AccessTransfers {
+export interface AccessTransfers {
   readonly segments: TransportSegment[];
   readonly offers: TransportOffer[];
   /** Where the traveler actually is at each end of the stay. */
@@ -217,7 +217,7 @@ interface AccessTransfers {
  * Buffers come from the connection rules, not a fixed figure: a bus arriving
  * at a terminal must still leave the airport's check-in time (ADR 0012 §4).
  */
-function buildAccessTransfers(
+export function buildAccessTransfers(
   outbound: TransportSegment,
   inbound: TransportSegment,
   request: SearchRequest,
@@ -284,7 +284,7 @@ function buildAccessTransfers(
  * Nearby is not equivalent (ADR 0013): a fare from another airport is only
  * usable if the journey to it is part of the itinerary being judged.
  */
-function buildOriginTransfers(
+export function buildOriginTransfers(
   outbound: TransportSegment,
   inbound: TransportSegment,
   request: SearchRequest,
@@ -445,7 +445,7 @@ function buildCandidate(
   };
 }
 
-function compareCandidates(a: RankedCandidate, b: RankedCandidate): number {
+export function compareCandidates(a: RankedCandidate, b: RankedCandidate): number {
   const byCost = compareMoney(a.summary.cost.total, b.summary.cost.total);
   if (byCost !== 0) return byCost;
   const byTime = a.summary.travelTimeMinutes - b.summary.travelTimeMinutes;
@@ -454,7 +454,7 @@ function compareCandidates(a: RankedCandidate, b: RankedCandidate): number {
 }
 
 /** Groups candidates by destination city, keeping each airport identifiable. */
-function groupByDestination(
+export function groupByDestination(
   attempts: readonly CandidateAttempt[],
   cities: CityRepository,
   issues: DomainIssue[],
