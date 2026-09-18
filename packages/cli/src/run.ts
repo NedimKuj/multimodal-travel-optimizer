@@ -1,0 +1,130 @@
+import { resolve } from "node:path";
+
+import { normalizeSearchRequest, type DomainIssue } from "@travel-optimizer/domain";
+import { loadReferenceData, SnapshotUnavailableError } from "@travel-optimizer/geo";
+import { runFlightSearch } from "@travel-optimizer/optimizer";
+import {
+  createAviasalesFlightProvider,
+  createFileResponseCache,
+  loadAviasalesConfig,
+} from "@travel-optimizer/providers";
+
+import { HELP_TEXT, parseArguments, type CliOptions } from "./args.js";
+import { formatSearch } from "./format.js";
+
+/*
+ * trip-search composition root: arguments -> reference data -> provider ->
+ * search -> output. All the decisions live in the packages it wires together.
+ */
+
+/** Cached provider responses live here, outside version control. */
+const CACHE_DIRECTORY = ".cache/providers";
+const CACHE_TTL_MS = 60 * 60 * 1000;
+
+export interface CliIo {
+  readonly stdout: (text: string) => void;
+  readonly stderr: (text: string) => void;
+  readonly env: Readonly<Partial<Record<string, string>>>;
+  readonly cwd: string;
+}
+
+function reportIssues(io: CliIo, heading: string, issues: readonly DomainIssue[]): void {
+  io.stderr(`${heading}\n`);
+  for (const issue of issues) {
+    io.stderr(`  ${issue.message}\n`);
+  }
+}
+
+function toSearchRequestInput(options: CliOptions): Record<string, unknown> {
+  return {
+    origin: options.origin,
+    destination: options.destination,
+    departureDate: options.from,
+    returnDate: options.to,
+    flexibilityDays: options.flexibilityDays,
+    ...(options.nights !== undefined && {
+      minNights: options.nights.min,
+      maxNights: options.nights.max,
+    }),
+    travelers: options.travelers,
+    ...(options.budget !== undefined && { budget: options.budget }),
+    // Phase 1 is flights only; other modes arrive with the transport graph.
+    transportModes: ["flight"],
+    allowOpenJaw: false,
+    allowMultiCity: false,
+  };
+}
+
+/**
+ * Runs the CLI and returns its exit code.
+ *
+ * 0 success (including "nothing matched"), 1 usage or configuration problem,
+ * 2 the provider failed outright.
+ */
+export async function run(argv: readonly string[], io: CliIo): Promise<number> {
+  const parsed = parseArguments(argv);
+  if (!parsed.ok) {
+    if ("help" in parsed) {
+      io.stdout(`${HELP_TEXT}\n`);
+      return 0;
+    }
+    reportIssues(io, "Invalid arguments:", parsed.issues);
+    io.stderr("\nRun with --help for usage.\n");
+    return 1;
+  }
+  const { options } = parsed;
+
+  const normalized = normalizeSearchRequest(toSearchRequestInput(options));
+  if (!normalized.ok) {
+    reportIssues(io, "Invalid search:", normalized.issues);
+    return 1;
+  }
+
+  const configResult = loadAviasalesConfig(io.env);
+  if (!configResult.ok) {
+    const missingToken = configResult.issues.some((issue) => issue.message.startsWith("token:"));
+    reportIssues(
+      io,
+      "Provider is not configured:",
+      missingToken
+        ? [{ code: "MISSING_TOKEN", message: "AVIASALES_API_TOKEN is not set" }]
+        : configResult.issues,
+    );
+    io.stderr("\nSet AVIASALES_API_TOKEN in .env (see .env.example).\n");
+    return 1;
+  }
+
+  let referenceData;
+  try {
+    referenceData = await loadReferenceData();
+  } catch (error) {
+    if (error instanceof SnapshotUnavailableError) {
+      io.stderr(`${error.message}\n`);
+    } else {
+      io.stderr(
+        `Could not load reference data: ${error instanceof Error ? error.message : String(error)}\n`,
+      );
+    }
+    return 1;
+  }
+
+  const provider = createAviasalesFlightProvider({
+    config: configResult.config,
+    airports: referenceData.airports.repository,
+    cache: createFileResponseCache(resolve(io.cwd, CACHE_DIRECTORY), CACHE_TTL_MS),
+  });
+
+  const trace = await runFlightSearch(
+    normalized.request,
+    { flightProvider: provider, cities: referenceData.cities.repository },
+    { currency: options.currency },
+  );
+
+  io.stdout(
+    options.json
+      ? `${JSON.stringify(trace, null, 2)}\n`
+      : `${formatSearch(trace, { limit: options.limit })}\n`,
+  );
+
+  return trace.status === "failed" ? 2 : 0;
+}

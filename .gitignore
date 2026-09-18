@@ -15,3 +15,6 @@ packages/geo/data/*.json
 
 # Raw provider captures
 .probe/
+
+# Provider response cache
+.cache/
