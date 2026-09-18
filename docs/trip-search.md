@@ -1,4 +1,4 @@
-# `trip-search` — Phase 1 flight exploration
+# `trip-search` — flight exploration
 
 Runs a real search from the command line, so the optimizer can be exercised
 without a UI (`docs/implementation-plan.md` §51).
@@ -46,16 +46,19 @@ judged as a whole trip rather than on fare alone.
 ## Reading the output
 
 ```text
-Provider calls: 1 (cache hit) · fares returned: 7
+Provider calls: 3 (cache hit) · fares returned: 7
 Filtered out: 2 wrong length
 Candidates: 5 across 3 destination(s)
 
 1. Istanbul (TR) — SAW
-   109.00 EUR / person · 218.00 EUR total · transport only
-   3 nights · 3h 45m travelling · direct both ways
-   out  2027-01-01 16:10 SJJ → 2027-01-01 20:00 SAW · 1h 50m · direct · PC 294
-   back 2027-01-04 15:20 SAW → 2027-01-04 15:15 SJJ · 1h 55m · direct · PC 294
-   cached price · checked 2026-09-18 10:41Z · aviasales · no provider expiry (freshness unknown)
+   127.02 EUR / person · 254.04 EUR total · transport only
+   Fare: cached · includes estimated access transfer (36.04 EUR)
+   3 nights in Istanbul · 5h 37m travelling · direct both ways
+   fly      2027-01-01 16:10 SJJ → 2027-01-01 20:00 SAW · 1h 50m · direct · PC 294
+   transfer 2027-01-01 20:45 SAW → 2027-01-01 21:41 IST · 56m · estimated
+   transfer 2027-01-04 12:24 IST → 2027-01-04 13:20 SAW · 56m · estimated
+   fly      2027-01-04 15:20 SAW → 2027-01-04 15:15 SJJ · 1h 55m · direct · PC 294
+   cached price · checked 2026-09-18 16:57Z · aviasales · no provider expiry (freshness unknown)
 ```
 
 - **Times are local** to each airport. A return that appears to land before it
@@ -68,8 +71,8 @@ Candidates: 5 across 3 destination(s)
   fare whose connection cannot be made is rejected and counted, not shown.
 - **"no provider expiry (freshness unknown)"** means this API supplied no
   expiry, not that the price lasts forever (ADR 0006).
-- **"transport only"** is literal: accommodation, transfers and extras are not
-  in that total, so it is not comparable with a complete-trip cost.
+- **"transport only"** means flights and their transfers, but no
+  accommodation, so it is not yet a complete-trip cost.
 - The **filtered-out counts** explain a thin result. Nothing is dropped
   silently.
 - `--json` prints the whole search trace: `searchId`, request fingerprint,
