@@ -384,6 +384,8 @@ function buildCandidate(
     segments: allSegments,
     offers: [offer, ...access.offers, ...originAccess.offers],
     stays: [],
+    // A provider round trip has no unpriced sector: it returns where it left.
+    gaps: [],
   };
 
   const summarized = summarizeTrip(candidate);

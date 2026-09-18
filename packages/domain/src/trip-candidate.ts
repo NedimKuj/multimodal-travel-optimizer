@@ -27,6 +27,27 @@ import {
  * origin airport, and consecutive segments need not share a location
  * (open-jaw).
  */
+/**
+ * A part of the journey we have no price for (ADR 0014).
+ *
+ * Deliberately **not** a segment and **not** an offer: it has no times and no
+ * cost, because we know neither. What we do know is kept — both endpoints, the
+ * distance, and why it is unpriced — so it can be shown rather than hidden.
+ *
+ * Unknown price is not zero price and is not an estimate.
+ */
+export const itineraryGapSchema = z.object({
+  id: z.string().min(1),
+  from: locationSchema,
+  to: locationSchema,
+  distanceKm: z.number().positive().optional(),
+  status: z.literal("unpriced"),
+  /** Why no price exists. Today: no licensed source for surface transport. */
+  reason: z.literal("no_licensed_source"),
+});
+
+export type ItineraryGap = z.infer<typeof itineraryGapSchema>;
+
 export const tripCandidateSchema = z.object({
   id: z.string().min(1),
   origin: locationSchema,
@@ -34,9 +55,12 @@ export const tripCandidateSchema = z.object({
   segments: z.array(transportSegmentSchema),
   offers: z.array(transportOfferSchema),
   stays: z.array(staySchema),
+  /** Sectors the traveler arranges themselves; excluded from every amount. */
+  gaps: z.array(itineraryGapSchema).default([]),
 });
 
 export type TripCandidate = z.infer<typeof tripCandidateSchema>;
+export type TripCandidateInput = z.input<typeof tripCandidateSchema>;
 
 function issue(code: string, message: string): DomainIssue {
   return { code, message };
@@ -104,6 +128,7 @@ export function validateTripCandidate(trip: TripCandidate): DomainIssue[] {
     );
   }
 
+  const usedGapIds = new Set<string>();
   for (let index = 1; index < segments.length; index += 1) {
     const previous = segments[index - 1];
     const current = segments[index];
@@ -113,6 +138,36 @@ export function validateTripCandidate(trip: TripCandidate): DomainIssue[] {
         issue(
           "SEGMENTS_NOT_CHRONOLOGICAL",
           `Segment ${current.id} departs before segment ${previous.id} arrives`,
+        ),
+      );
+    }
+
+    // A jump between two places must be explained: either the traveler was
+    // carried there (a transfer segment) or they arrange it themselves (a gap).
+    if (previous.destination.id !== current.origin.id) {
+      const gap = trip.gaps.find(
+        (entry) =>
+          entry.from.id === previous.destination.id && entry.to.id === current.origin.id,
+      );
+      if (gap === undefined) {
+        issues.push(
+          issue(
+            "UNEXPLAINED_DISCONTINUITY",
+            `Segment ${current.id} departs from ${current.origin.id}, but ${previous.id} arrived at ${previous.destination.id}; declare a gap or a transfer`,
+          ),
+        );
+      } else {
+        usedGapIds.add(gap.id);
+      }
+    }
+  }
+
+  for (const gap of trip.gaps) {
+    if (!usedGapIds.has(gap.id)) {
+      issues.push(
+        issue(
+          "ORPHAN_GAP",
+          `Gap ${gap.id} (${gap.from.id} → ${gap.to.id}) does not sit between two consecutive segments`,
         ),
       );
     }
@@ -255,11 +310,20 @@ function validateStays(trip: TripCandidate): DomainIssue[] {
 }
 
 /**
- * `complete`: transport and every night on the ground are priced.
- * `transport_and_partial_accommodation`: some nights have no stay, so this
- * total is not a complete-trip cost.
+ * `complete`: nothing is excluded from the amount.
+ * `excludes_unpriced_segment`: a sector of the journey has no price and is not
+ * in the amount, so it is a **known cost**, not a total (ADR 0014).
+ * `transport_and_partial_accommodation`: nights on the ground have no stay.
+ *
+ * An unpriced sector takes precedence in the label, because a missing sector
+ * is a bigger hole than a missing night; `exclusions` lists every reason.
  */
-export type TripCostScope = "complete" | "transport_and_partial_accommodation";
+export type TripCostScope =
+  | "complete"
+  | "excludes_unpriced_segment"
+  | "transport_and_partial_accommodation";
+
+export type CostExclusion = "unpriced_segment" | "accommodation";
 
 export interface TripCost {
   /** Sum of selected transport offers for the whole party. */
@@ -274,10 +338,12 @@ export interface TripCost {
   readonly estimated: Money;
   readonly total: Money;
   /**
-   * What `total` covers. Totals of different scopes must not be compared
+   * What `total` covers. Amounts of different scopes must not be compared
    * (docs/optimizer-spec.md §19).
    */
   readonly scope: TripCostScope;
+  /** Every reason the amount is not the whole journey, in a stable order. */
+  readonly exclusions: readonly CostExclusion[];
   /**
    * The total split across travelers; shares differ by at most one minor unit
    * and always sum to `total`.
@@ -345,6 +411,8 @@ export interface TripSummary {
   /** Changes between consecutive segments with no stay in between. */
   readonly connections: number;
   readonly provenance: TripProvenance;
+  /** Sectors excluded from every amount, kept so output can show them. */
+  readonly unpricedGaps: readonly ItineraryGap[];
 }
 
 export type SummarizeTripResult =
@@ -473,6 +541,16 @@ export function summarizeTrip(trip: TripCandidate): SummarizeTripResult {
     partiallyEstimated: estimates.length > 0,
   };
 
+  const exclusions: CostExclusion[] = [];
+  if (trip.gaps.length > 0) exclusions.push("unpriced_segment");
+  if (uncoveredNights.length > 0) exclusions.push("accommodation");
+  const costScope: TripCostScope =
+    trip.gaps.length > 0
+      ? "excludes_unpriced_segment"
+      : uncoveredNights.length > 0
+        ? "transport_and_partial_accommodation"
+        : "complete";
+
   return {
     ok: true,
     summary: {
@@ -490,8 +568,8 @@ export function summarizeTrip(trip: TripCandidate): SummarizeTripResult {
         accommodation,
         estimated,
         total,
-        scope:
-          uncoveredNights.length === 0 ? "complete" : "transport_and_partial_accommodation",
+        scope: costScope,
+        exclusions,
         perPersonShares: allocateEvenly(total, trip.travelers),
       },
       travelTimeMinutes: trip.segments.reduce(
@@ -503,6 +581,7 @@ export function summarizeTrip(trip: TripCandidate): SummarizeTripResult {
       stops: trip.segments.reduce((count, segment) => count + segment.transfers, 0),
       connections,
       provenance,
+      unpricedGaps: trip.gaps,
     },
   };
 }

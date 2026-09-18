@@ -4,7 +4,6 @@ import { compareMoney, money } from "./money/money.js";
 import { stay } from "./test-fixtures/accommodation.js";
 import {
   PRAGUE,
-  PRAHA_HLAVNI,
   PRG,
   SJJ,
   VIE,
@@ -17,6 +16,7 @@ import {
   tripCandidateSchema,
   validateTripCandidate,
   type TripCandidate,
+  type TripCandidateInput,
   type TripSummary,
 } from "./trip-candidate.js";
 
@@ -49,11 +49,13 @@ const prgToSjj = segment({
   arrival: "2027-01-02T19:40+01:00",
 });
 
+// Airport to airport, so the fixture stays continuous: the airport-to-station
+// hops are a separate concern, exercised by the gap and transfer tests below.
 const viennaToPragueTrain = segment({
   id: "seg-train-wien-praha",
   mode: "train",
-  origin: WIEN_HBF,
-  destination: PRAHA_HLAVNI,
+  origin: VIE,
+  destination: PRG,
   departure: "2026-12-29T10:00+01:00",
   arrival: "2026-12-29T14:00+01:00",
 });
@@ -82,8 +84,13 @@ const pragueFourNights = stay({
   amountMinor: 32000,
 });
 
-function trip(fields: Omit<TripCandidate, "origin" | "travelers"> & Partial<TripCandidate>): TripCandidate {
+function trip(fields: Partial<TripCandidateInput> & { id: string }): TripCandidate {
   return tripCandidateSchema.parse({ origin: SJJ, travelers: 2, ...fields });
+}
+
+/** A sector the traveler arranges themselves, as an open jaw implies. */
+function gap(id: string, from: typeof VIE, to: typeof PRG, distanceKm: number) {
+  return { id, from, to, distanceKm, status: "unpriced" as const, reason: "no_licensed_source" as const };
 }
 
 const roundTrip = trip({
@@ -101,6 +108,7 @@ const openJaw = trip({
     offer({ id: "offer-back", segmentIds: [prgToSjj.id], amountMinor: 9000 }),
   ],
   stays: [viennaThreeNights, pragueFourNights],
+  gaps: [gap("gap-vie-prg", VIE, PRG, 250)],
 });
 
 const multiCity = trip({
@@ -242,8 +250,8 @@ describe("time, legs, stops and connections", () => {
     const sameDayTrain = segment({
       id: "seg-same-day-train",
       mode: "train",
-      origin: WIEN_HBF,
-      destination: PRAHA_HLAVNI,
+      origin: VIE,
+      destination: PRG,
       departure: "2026-12-26T15:00+01:00",
       arrival: "2026-12-26T19:00+01:00",
     });
@@ -314,8 +322,8 @@ describe("accommodation coverage", () => {
     const overnightTrain = segment({
       id: "seg-night-train",
       mode: "train",
-      origin: WIEN_HBF,
-      destination: PRAHA_HLAVNI,
+      origin: VIE,
+      destination: PRG,
       departure: "2026-12-29T23:10+01:00",
       arrival: "2026-12-30T06:20+01:00",
     });
@@ -521,10 +529,26 @@ describe("trips containing an estimated transfer", () => {
     sourceType: "estimated",
   });
 
+  const transferBack = segment({
+    id: "seg-transfer-vie-back",
+    mode: "ground_transfer",
+    origin: WIEN_HBF,
+    destination: VIE,
+    departure: "2027-01-02T16:00+01:00",
+    arrival: "2027-01-02T16:45+01:00",
+  });
+
+  const transferBackOffer = offer({
+    id: "offer-transfer-back",
+    segmentIds: [transferBack.id],
+    amountMinor: 900,
+    sourceType: "estimated",
+  });
+
   function withTransfer(fareSourceType: "cached" | "live") {
     return trip({
       id: `with-transfer-${fareSourceType}`,
-      segments: [sjjToVie, transferSegment, vieToSjj],
+      segments: [sjjToVie, transferSegment, transferBack, vieToSjj],
       offers: [
         offer({
           id: "offer-rt",
@@ -533,6 +557,7 @@ describe("trips containing an estimated transfer", () => {
           sourceType: fareSourceType,
         }),
         transferOffer,
+        transferBackOffer,
       ],
       stays: [],
     });
@@ -567,10 +592,10 @@ describe("trips containing an estimated transfer", () => {
   it("breaks the cost into fares, transfers and the estimated portion", () => {
     const { cost } = summary(withTransfer("cached"));
     expect(cost.fares).toEqual(money(30000, "EUR")); // 150.00 x 2 travelers
-    expect(cost.groundTransfer).toEqual(money(1800, "EUR")); // 9.00 x 2 travelers
-    expect(cost.transport).toEqual(money(31800, "EUR"));
-    expect(cost.estimated).toEqual(money(1800, "EUR"));
-    expect(cost.total).toEqual(money(31800, "EUR"));
+    expect(cost.groundTransfer).toEqual(money(3600, "EUR")); // 9.00 each way x 2 travelers
+    expect(cost.transport).toEqual(money(33600, "EUR"));
+    expect(cost.estimated).toEqual(money(3600, "EUR"));
+    expect(cost.total).toEqual(money(33600, "EUR"));
   });
 
   it("includes the transfer in the total the traveler pays", () => {
@@ -580,30 +605,7 @@ describe("trips containing an estimated transfer", () => {
   });
 
   it("lists several estimated components without repeating one", () => {
-    const secondTransfer = segment({
-      id: "seg-transfer-back",
-      mode: "ground_transfer",
-      origin: WIEN_HBF,
-      destination: VIE,
-      departure: "2027-01-02T15:00+01:00",
-      arrival: "2027-01-02T15:45+01:00",
-    });
-    const candidate = trip({
-      id: "two-transfers",
-      segments: [sjjToVie, transferSegment, secondTransfer, vieToSjj],
-      offers: [
-        offer({ id: "offer-rt", segmentIds: [sjjToVie.id, vieToSjj.id], amountMinor: 15000 }),
-        transferOffer,
-        offer({
-          id: "offer-transfer-back",
-          segmentIds: [secondTransfer.id],
-          amountMinor: 900,
-          sourceType: "estimated",
-        }),
-      ],
-      stays: [],
-    });
-    const { provenance, cost } = summary(candidate);
+    const { provenance, cost } = summary(withTransfer("cached"));
     expect(provenance.estimatedComponents).toEqual(["access_transfer"]);
     expect(cost.groundTransfer).toEqual(money(3600, "EUR"));
   });
@@ -640,5 +642,87 @@ describe("trips containing an estimated transfer", () => {
     expect(result.totalJourneyDurationMinutes).toBeGreaterThan(
       7 * 24 * 60 + 9 * 60,
     );
+  });
+});
+
+// ── Unpriced gaps (ADR 0014) ─────────────────────────────────────────────────
+
+describe("itineraries with an unpriced gap", () => {
+  const prgToSjjLater = segment({
+    id: "seg-prg-sjj-later",
+    mode: "flight",
+    origin: PRG,
+    destination: SJJ,
+    departure: "2027-01-02T18:00+01:00",
+    arrival: "2027-01-02T19:40+01:00",
+  });
+
+  const vieToPragueGap = {
+    id: "gap-vie-prg",
+    from: VIE,
+    to: PRG,
+    distanceKm: 250,
+    status: "unpriced" as const,
+    reason: "no_licensed_source" as const,
+  };
+
+  function openJaw(gaps: TripCandidateInput["gaps"] = [vieToPragueGap]): TripCandidate {
+    return trip({
+      id: "open-jaw-gap",
+      segments: [sjjToVie, prgToSjjLater],
+      offers: [
+        offer({ id: "offer-out", segmentIds: [sjjToVie.id], amountMinor: 7500 }),
+        offer({ id: "offer-back", segmentIds: [prgToSjjLater.id], amountMinor: 9000 }),
+      ],
+      stays: [],
+      gaps,
+    });
+  }
+
+  it("accepts a discontinuity that a gap explains", () => {
+    expect(issueCodes(openJaw())).toEqual([]);
+  });
+
+  it("rejects a discontinuity nothing explains", () => {
+    // Phase 1 could not detect this: the traveler teleports from VIE to PRG.
+    expect(issueCodes(openJaw([]))).toEqual(["UNEXPLAINED_DISCONTINUITY"]);
+  });
+
+  it("rejects a gap that does not sit between two segments", () => {
+    const stray = { ...vieToPragueGap, id: "gap-stray", from: PRG, to: VIE };
+    expect(issueCodes(openJaw([vieToPragueGap, stray]))).toEqual(["ORPHAN_GAP"]);
+  });
+
+  it("contributes nothing to any amount", () => {
+    const { cost } = summary(openJaw());
+    // 75.00 + 90.00 per traveler, for two: the gap adds nothing.
+    expect(cost.fares).toEqual(money(33000, "EUR"));
+    expect(cost.total).toEqual(money(33000, "EUR"));
+    expect(cost.estimated).toEqual(money(0, "EUR"));
+  });
+
+  it("marks the amount as excluding the sector", () => {
+    const { cost } = summary(openJaw());
+    expect(cost.scope).toBe("excludes_unpriced_segment");
+    // This fixture books no accommodation either, so both reasons are listed.
+    expect(cost.exclusions).toEqual(["unpriced_segment", "accommodation"]);
+  });
+
+  it("keeps the gap on the summary so output can show it", () => {
+    expect(summary(openJaw()).unpricedGaps).toEqual([vieToPragueGap]);
+  });
+
+  it("names the missing sector in the scope even when nights are also missing", () => {
+    const { cost } = summary(openJaw());
+    // A missing sector is a bigger hole than a missing night, so it wins the
+    // single-value label while `exclusions` keeps both.
+    expect(cost.scope).toBe("excludes_unpriced_segment");
+    expect(cost.exclusions).toContain("accommodation");
+  });
+
+  it("reports a complete scope when nothing is excluded", () => {
+    const { cost } = summary(roundTrip);
+    expect(cost.scope).toBe("complete");
+    expect(cost.exclusions).toEqual([]);
   });
 });
