@@ -99,6 +99,64 @@ Important considerations:
 
 The implementation must not hard-code assumptions about data freshness.
 
+### Verification record
+
+```text
+Provider:              Aviasales (Travelpayouts affiliate network)
+API:                   Flights Data API (aviasales/v3/*, legacy v1/v2)
+Purpose:               cached flight price discovery
+Environment:           production endpoints only (no sandbox known)
+Access status:         API token held locally; program eligibility UNVERIFIED
+Commercial use:        UNVERIFIED
+Caching allowed:       UNVERIFIED
+Redistribution:        UNVERIFIED — assume not allowed
+Attribution required:  UNVERIFIED — affiliate marker assumed required for links
+Booking/deep links:    redirect only, via affiliate link with marker
+Rate limits:           UNVERIFIED for Data API
+Data freshness:        cached fares from recent user searches; treat as `cached`
+Last verified:         2026-09-18 (attempted; see below)
+```
+
+### Why these are unverified
+
+Verification was attempted on 2026-09-18 from this repository. The Travelpayouts
+support centre (`support.travelpayouts.com`), which hosts both the affiliate
+agreement and the Data API reference, returns **HTTP 403 to automated
+requests**, and `api.travelpayouts.com/aviasales/v3/prices_for_dates` returns
+**401 without a token**. No terms text could therefore be read and confirmed
+here. Nothing above may be treated as approved until a human confirms it while
+signed in to the partner dashboard.
+
+### Questions to answer from the partner dashboard
+
+1. Does the account's program membership permit commercial use of Data API
+   prices in a metasearch-style product?
+2. May normalized prices be stored, and for how long? Is there a required
+   maximum cache age or a mandatory refresh?
+3. May prices be shown to end users without an affiliate link, and must every
+   displayed price carry a marker-bearing link?
+4. What attribution or branding must accompany displayed prices?
+5. What are the Data API rate limits and the consequences of exceeding them?
+6. May the published reference datasets (`/data/airports.json` and similar) be
+   stored in a source repository, or only fetched at deploy/run time?
+7. Does the real-time Flight Search API (the only one offering open-jaw) require
+   separate approval, and do its conversion obligations apply to us?
+
+### Restrictions applied until those answers exist
+
+These are deliberately conservative; they are engineering constraints, not
+claims about what the terms say.
+
+- Raw API responses are **never committed**; captures stay in a gitignored
+  directory and test fixtures are synthetic.
+- Reference datasets are fetched locally and **not committed**; only a
+  provenance record (source, timestamp, checksum, record count) is committed.
+- Every price is labelled `cached` with its `fetchedAt`, and is never presented
+  as live or bookable.
+- Booking links are emitted only when an affiliate marker is configured;
+  otherwise no link is produced rather than an unattributed one.
+- No public deployment of this data until questions 1–4 are answered.
+
 ---
 
 ## Amadeus
