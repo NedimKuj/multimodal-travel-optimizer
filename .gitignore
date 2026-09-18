@@ -8,3 +8,10 @@ coverage/
 !.env.example
 
 .DS_Store
+
+# Provider reference datasets: fetched locally, terms unverified
+packages/geo/data/*.json
+!packages/geo/data/*.meta.json
+
+# Raw provider captures
+.probe/

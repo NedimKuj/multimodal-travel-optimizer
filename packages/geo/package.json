@@ -1,0 +1,24 @@
+{
+  "name": "@travel-optimizer/geo",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -p tsconfig.build.json",
+    "fetch:airports": "node dist/bin/fetch-airports.js"
+  },
+  "dependencies": {
+    "@travel-optimizer/domain": "workspace:*",
+    "zod": "^4.6.5"
+  }
+}
