@@ -3,9 +3,10 @@
 Runs a real search from the command line, so the optimizer can be exercised
 without a UI (`docs/implementation-plan.md` §51).
 
-Phase 1 searches **flights only**: no accommodation, ground transport,
-alternative airports, open jaw or multi-city. Every price is a **cached fare
-for transport only** and is not guaranteed bookable.
+It searches **flights**, plus the ground transfers needed to reach them: no
+accommodation, no trains or buses, no open jaw or multi-city. Fares are
+**cached** and not guaranteed bookable; transfer costs are **estimates from a
+distance model**, never quotes.
 
 ## Prerequisites
 
@@ -36,6 +37,12 @@ return dates, each with `±flex` tolerance.
 `--budget` is **per person by default**; pass `--budget-basis total` for a whole
 trip budget. The CLI prints back which one it used.
 
+`--alternative-airports` also searches nearby origin airports (off by default).
+Each one costs provider calls against the search budget, so the CLI prints which
+alternatives it used and which it skipped, and why. A trip leaving from an
+alternative origin carries the estimated journey to that airport, so it is
+judged as a whole trip rather than on fare alone.
+
 ## Reading the output
 
 ```text
@@ -53,6 +60,12 @@ Candidates: 5 across 3 destination(s)
 
 - **Times are local** to each airport. A return that appears to land before it
   departs is a time-zone difference, not an error.
+- **`transfer` legs are estimates**, shown when an airport is far enough from
+  its city to matter (default: more than 25 km in a straight line). Their time
+  and cost come from a distance model (ADR 0011), and the `Fare:` line names
+  what is retrieved and what is estimated, so a cached fare is never relabelled.
+- **Connections are validated** against minimum connection times (ADR 0012); a
+  fare whose connection cannot be made is rejected and counted, not shown.
 - **"no provider expiry (freshness unknown)"** means this API supplied no
   expiry, not that the price lasts forever (ADR 0006).
 - **"transport only"** is literal: accommodation, transfers and extras are not
