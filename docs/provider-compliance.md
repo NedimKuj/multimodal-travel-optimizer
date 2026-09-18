@@ -234,8 +234,8 @@ Timetable availability does not imply fare or booking availability.
 ### Status: blocked, under investigation (Phase 2)
 
 ```text
-Access status:   no source cleared
-Implementation:  NOT PERMITTED until the conditions below are met
+Access status:   no source cleared (investigated 2026-09-18, see outcome below)
+Implementation:  NOT PERMITTED
 Last updated:    2026-09-18
 ```
 
@@ -269,6 +269,50 @@ must be assessed individually.
   priced trip
 - attribution obligations
 - any registration, contract or approval prerequisite
+
+### Investigation outcome — 2026-09-18: NO SOURCE CLEARED
+
+Scope investigated: GTFS ecosystem and German open data, per the agreed order.
+Findings from public sources only; nothing below was confirmed with a licence
+holder, and no feed was downloaded.
+
+**1. There is no open rail feed for our origin.** No GTFS feed for Bosnia and
+Herzegovina rail could be found. ŽFBH publishes a timetable on its website
+only, and ŽRS likewise. Reading those pages programmatically would be scraping,
+which rule 1 forbids. **This alone blocks rail for journeys starting at SJJ.**
+
+**2. German feeds exist and look usable, but cover the wrong geography.**
+`gtfs.de` republishes the public DELFI dataset as GTFS, including a
+long-distance rail feed, and states **Creative Commons 4.0** (CC BY 4.0; the
+realtime stream is stated as CC BY-SA 4.0). Attribution would be required. They
+cover Germany, while the destinations discovery actually returns from SJJ
+(Rome, Istanbul, Yerevan) are not served by them.
+
+**3. Fares are not established.** Neither the feed pages nor the licence page
+document whether `fare_attributes`/`fare_rules` are present. German GTFS feeds
+typically carry no fares. A timetable-only feed yields segments with **no
+offer** — representable (ADR 0002) but unable to price a trip.
+
+**4. Licence terms could not be read in full.** `gtfs.de/en/licence/` does not
+state the terms in its page body, so the CC claim comes from the feed listing
+rather than a licence document. The CC BY-SA element on realtime data needs
+legal review before derived results are published.
+
+### Decision
+
+Rail and bus adapters stay **unimplemented**. Conditions 1 (source identified)
+and 2 (terms documented) are partly met for German data; conditions 3
+(permitted for our use) and 4 (sufficient data) are **not met**, and for our
+origin no source exists at all.
+
+Phase 2 therefore ships the provider-independent layer only. There is no
+Phase 2b at this time.
+
+**If rail is revisited, start here:** confirm whether DELFI/gtfs.de feeds carry
+fares by downloading one; obtain the licence text in writing; and find out
+whether any Balkan operator publishes machine-readable timetables at all. Until
+then, a multimodal trip from Sarajevo cannot include a train leg without
+inventing data, and we will not invent it.
 
 ### Sufficiency bar
 
