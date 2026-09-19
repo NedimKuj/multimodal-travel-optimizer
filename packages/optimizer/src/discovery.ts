@@ -21,10 +21,11 @@ import type { SelectedOrigin } from "./origin-expansion.js";
 import type { TravelWindow } from "./travel-window.js";
 
 /*
- * Two-stage one-way discovery (docs/implementation-plan.md §48).
+ * Staged one-way discovery (docs/implementation-plan.md §48).
  *
- * Stage 1 asks one broad question: where can we fly from here? Stage 2 spends
- * what the budget has left finding ways home, for destinations chosen
+ * Stage 1 asks one broad question: where can we fly from here? Stage 2 finds
+ * ways home. Stage 3, for multi-city, asks the same broad question again from
+ * each destination: where can we go on to? Destinations are chosen
  * deterministically rather than by whatever order the provider answered in.
  *
  * The call budget is an application-level safety limit shared by every optional
@@ -39,9 +40,15 @@ export interface EnrichmentRecord {
   readonly returnOffersFound: number;
 }
 
-/** A destination whose return legs were never queried (`budget.ts`). */
+/** A destination a query was not spent on, in the shared shape (`budget.ts`). */
 export interface SkippedDestination extends SkippedQuery {
   readonly cheapestOutboundMinor: number;
+}
+
+/** A destination asked where it could go on to next (stage 3). */
+export interface OnwardRecord {
+  readonly airport: Location;
+  readonly onwardOffersFound: number;
 }
 
 export interface DiscoveryResult {
@@ -52,7 +59,13 @@ export interface DiscoveryResult {
     string,
     { readonly segments: readonly TransportSegment[]; readonly offers: readonly TransportOffer[] }
   >;
+  /** Onward legs keyed by the destination airport they depart from. */
+  readonly onwardByAirport: ReadonlyMap<
+    string,
+    { readonly segments: readonly TransportSegment[]; readonly offers: readonly TransportOffer[] }
+  >;
   readonly enriched: readonly EnrichmentRecord[];
+  readonly onward: readonly OnwardRecord[];
   readonly skipped: readonly SkippedDestination[];
   readonly failures: readonly ProviderFailure[];
   readonly metrics: readonly ProviderCallMetrics[];
@@ -70,6 +83,12 @@ export interface DiscoveryOptions {
   readonly callBudget?: number;
   /** Cap on destinations enriched, before the budget is even considered. */
   readonly maxEnrichedDestinations?: number;
+  /**
+   * Ask each destination where it can go on to next. Off unless multi-city was
+   * requested: every onward query competes for the same budget as a way home,
+   * and a search that skips queries reports itself as partial.
+   */
+  readonly multiCity?: boolean;
   readonly signal?: AbortSignal;
 }
 
@@ -143,7 +162,9 @@ export async function discoverOneWayLegs(
       outboundSegments: [],
       outboundOffers: [],
       returnsByAirport: new Map(),
+      onwardByAirport: new Map(),
       enriched: [],
+      onward: [],
       skipped: [],
       failures,
       metrics,
@@ -160,15 +181,27 @@ export async function discoverOneWayLegs(
     string,
     { segments: readonly TransportSegment[]; offers: readonly TransportOffer[] }
   >();
+  const onwardByAirport = new Map<
+    string,
+    { segments: readonly TransportSegment[]; offers: readonly TransportOffer[] }
+  >();
   const enriched: EnrichmentRecord[] = [];
+  const onward: OnwardRecord[] = [];
   const skipped: SkippedDestination[] = [];
 
   const returnCallCost = costOfQuery(options.window.return);
+  // An onward leg may depart any time the traveler is away, so it is priced
+  // against the whole window rather than the return range alone.
+  const onwardCallCost = costOfQuery(options.window.outerBounds);
   const homeCode = primary.airport.iata ?? primary.airport.id;
 
-  const skip = (candidate: Candidate, reason: SkippedQuery["reason"]): void => {
+  const skip = (
+    candidate: Candidate,
+    stage: "return" | "onward",
+    reason: SkippedQuery["reason"],
+  ): void => {
     const record = {
-      stage: "return" as const,
+      stage,
       airport: candidate.airport,
       cheapestOutboundMinor: candidate.cheapestOutboundMinor,
       reason,
@@ -177,12 +210,8 @@ export async function discoverOneWayLegs(
     recordSkip(budget, record);
   };
 
-  for (const candidate of shortlist) {
-    if (!canAfford(budget, returnCallCost)) {
-      skip(candidate, "call_budget");
-      continue;
-    }
-
+  /** Asks how to get home from one destination. */
+  const queryReturn = async (candidate: Candidate): Promise<void> => {
     const code = candidate.airport.iata ?? candidate.airport.id;
     spend(budget, returnCallCost);
     const back = await provider.search(
@@ -200,26 +229,76 @@ export async function discoverOneWayLegs(
 
     if (back.status === "failed") {
       enriched.push({ ...candidate, returnOffersFound: 0 });
-      continue;
+      return;
     }
     returnsByAirport.set(candidate.airport.id, {
       segments: back.data.segments,
       offers: back.data.offers,
     });
     enriched.push({ ...candidate, returnOffersFound: back.data.offers.length });
+  };
+
+  /** Asks where a destination can be travelled on to (stage 3). */
+  const queryOnward = async (candidate: Candidate): Promise<void> => {
+    const code = candidate.airport.iata ?? candidate.airport.id;
+    spend(budget, onwardCallCost);
+    const on = await provider.search(
+      {
+        origins: [code],
+        destinations: "anywhere",
+        departureDates: options.window.outerBounds,
+        travelers: options.travelers,
+        currency: options.currency,
+      },
+      options.signal === undefined ? undefined : { signal: options.signal },
+    );
+    metrics.push(on.metrics);
+    failures.push(...on.failures);
+
+    if (on.status === "failed") {
+      onward.push({ airport: candidate.airport, onwardOffersFound: 0 });
+      return;
+    }
+    onwardByAirport.set(candidate.airport.id, {
+      segments: on.data.segments,
+      offers: on.data.offers,
+    });
+    onward.push({ airport: candidate.airport, onwardOffersFound: on.data.offers.length });
+  };
+
+  for (const candidate of shortlist) {
+    if (!canAfford(budget, returnCallCost)) {
+      skip(candidate, "return", "call_budget");
+      continue;
+    }
+    await queryReturn(candidate);
+  }
+
+  // Stage 3 spends whatever stage 2 left, and only when multi-city was asked
+  // for. The allocation between the two stages is Phase 3b's next step.
+  if (options.multiCity === true) {
+    for (const candidate of shortlist) {
+      if (!canAfford(budget, onwardCallCost)) {
+        skip(candidate, "onward", "call_budget");
+        continue;
+      }
+      await queryOnward(candidate);
+    }
   }
 
   // Destinations past the enrichment cap were never candidates for a call: a
   // limit of ours stopped them, not the budget.
   for (const candidate of ranked.slice(shortlist.length)) {
-    skip(candidate, "cap");
+    skip(candidate, "return", "cap");
   }
 
   return {
     outboundSegments: outbound.data.segments,
     outboundOffers: outbound.data.offers,
     returnsByAirport,
+    onwardByAirport,
     enriched,
+    onward,
     skipped,
     failures,
     metrics,

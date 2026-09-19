@@ -103,6 +103,9 @@ export async function exploreComposedItineraries(
     ...(options.maxEnrichedDestinations !== undefined && {
       maxEnrichedDestinations: options.maxEnrichedDestinations,
     }),
+    // Onward discovery is opt-in: it competes for the same budget as the ways
+    // home, and every skipped query makes a search report itself as partial.
+    ...(request.allowMultiCity && { multiCity: true }),
     ...(options.signal !== undefined && { signal: options.signal }),
   });
 

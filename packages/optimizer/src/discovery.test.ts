@@ -16,6 +16,7 @@ import {
   CIA,
   FCO,
   metrics,
+  MXP,
   offer,
   request,
   SAW,
@@ -66,11 +67,19 @@ function result(
   );
 }
 
-/** A provider that answers stage 1 once, then each return query by origin. */
+const nothing = () => okResult("fixture-flights", { segments: [], offers: [] }, metrics);
+
+/**
+ * A provider that answers each stage by the shape of its query.
+ *
+ * "Anywhere" from home is stage 1; "anywhere" from a destination is stage 3;
+ * anything else is a return query, answered by where it departs from.
+ */
 function stagedProvider(
   outbound: ProviderResult<TransportSearchResult>,
   returns: Record<string, ProviderResult<TransportSearchResult>>,
   queries: FlightSearchQuery[] = [],
+  onward: Record<string, ProviderResult<TransportSearchResult>> = {},
 ): FlightProvider {
   return {
     descriptor: {
@@ -82,11 +91,12 @@ function stagedProvider(
     },
     search: (query) => {
       queries.push(query);
-      if (query.destinations === "anywhere") return Promise.resolve(outbound);
       const [from] = query.origins;
-      return Promise.resolve(
-        returns[from ?? ""] ?? okResult("fixture-flights", { segments: [], offers: [] }, metrics),
-      );
+      if (query.destinations === "anywhere") {
+        if (from === "SJJ") return Promise.resolve(outbound);
+        return Promise.resolve(onward[from ?? ""] ?? nothing());
+      }
+      return Promise.resolve(returns[from ?? ""] ?? nothing());
     },
   };
 }
@@ -242,5 +252,106 @@ describe("discoverOneWayLegs", () => {
     });
     expect(discovery.status).toBe("failed");
     expect(discovery.enriched).toEqual([]);
+  });
+});
+
+describe("discoverOneWayLegs — onward legs (stage 3)", () => {
+  /** Rome to Milan: the middle leg of a multi-city trip. */
+  const romeToMilan = (() => {
+    const leg = segment({
+      id: "fco-mxp",
+      origin: FCO,
+      destination: MXP,
+      departure: "2026-12-30T10:00+01:00",
+      arrival: "2026-12-30T11:15+01:00",
+    });
+    return { segments: [leg], offers: [offer("fco-mxp-fare", [leg.id], 4000)] };
+  })();
+
+  it("asks nothing about onward legs unless multi-city was requested", async () => {
+    const queries: FlightSearchQuery[] = [];
+    const provider = stagedProvider(
+      result([oneWay("to-fco", FCO, 2600)]),
+      { FCO: result([homeward("fco-home", FCO, 3200)]) },
+      queries,
+      { FCO: result([romeToMilan]) },
+    );
+    const discovery = await discoverOneWayLegs(provider, {
+      window,
+      currency: "EUR",
+      travelers: 2,
+      origins,
+    });
+    expect(discovery.onward).toEqual([]);
+    expect(discovery.onwardByAirport.size).toBe(0);
+    // One stage-1 query and one return query: nothing was asked from Rome.
+    expect(queries.filter((query) => query.destinations === "anywhere")).toHaveLength(1);
+  });
+
+  it("asks each destination where it can go on to", async () => {
+    const queries: FlightSearchQuery[] = [];
+    const provider = stagedProvider(
+      result([oneWay("to-fco", FCO, 2600)]),
+      { FCO: result([homeward("fco-home", FCO, 3200)]) },
+      queries,
+      { FCO: result([romeToMilan]) },
+    );
+    const discovery = await discoverOneWayLegs(provider, {
+      window,
+      currency: "EUR",
+      travelers: 2,
+      origins,
+      multiCity: true,
+    });
+    expect(discovery.onward).toEqual([{ airport: FCO, onwardOffersFound: 1 }]);
+    expect(discovery.onwardByAirport.get(FCO.id)?.offers).toHaveLength(1);
+    const onwardQuery = queries.find(
+      (query) => query.destinations === "anywhere" && query.origins[0] === "FCO",
+    );
+    // The onward leg may leave any time the traveler is away, so it is asked
+    // against the whole window, not the return range.
+    expect(onwardQuery?.departureDates).toEqual(window.outerBounds);
+  });
+
+  it("keeps onward queries inside the same budget as everything else", async () => {
+    const queries: FlightSearchQuery[] = [];
+    const provider = stagedProvider(
+      result([oneWay("to-cia", CIA, 2000), oneWay("to-fco", FCO, 2600)]),
+      {},
+      queries,
+      { CIA: result([]), FCO: result([]) },
+    );
+    const discovery = await discoverOneWayLegs(provider, {
+      window,
+      currency: "EUR",
+      travelers: 2,
+      origins,
+      callBudget: 7,
+      multiCity: true,
+    });
+    expect(discovery.callsPlanned).toBeLessThanOrEqual(7);
+    expect(queries.length).toBeGreaterThan(1);
+  });
+
+  it("records an onward query it could not afford, naming the stage", async () => {
+    const provider = stagedProvider(
+      result([oneWay("to-cia", CIA, 2000), oneWay("to-fco", FCO, 2600)]),
+      {},
+      [],
+      {},
+    );
+    // Stage 1 costs 1, each return 2: budget 5 funds both returns and no more.
+    const discovery = await discoverOneWayLegs(provider, {
+      window,
+      currency: "EUR",
+      travelers: 2,
+      origins,
+      callBudget: 5,
+      multiCity: true,
+    });
+    expect(discovery.callsPlanned).toBeLessThanOrEqual(5);
+    const onwardSkips = discovery.skipped.filter((entry) => entry.stage === "onward");
+    expect(onwardSkips.map((entry) => entry.airport.iata)).toEqual(["CIA", "FCO"]);
+    expect(onwardSkips.every((entry) => entry.reason === "call_budget")).toBe(true);
   });
 });
