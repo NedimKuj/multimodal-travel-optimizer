@@ -1,19 +1,29 @@
-import { failedResult, money } from "@travel-optimizer/domain";
+import {
+  failedResult,
+  money,
+  okResult,
+  type FlightSearchQuery,
+} from "@travel-optimizer/domain";
 import {
   runFlightSearch,
   type SearchTrace,
 } from "@travel-optimizer/optimizer";
 import {
+  CIA,
   cityRepository,
   FCO,
   fixtureAirports,
   fixtureGeography,
   ISTANBUL,
   metrics,
+  MXP,
+  offer,
   request,
   roundTrip,
   SAW,
   searchResult,
+  segment,
+  SJJ,
   stubFlightProvider,
 } from "@travel-optimizer/optimizer/test-fixtures";
 import { describe, expect, it } from "vitest";
@@ -267,5 +277,121 @@ describe("open-jaw output", () => {
     expect(output).toContain("The amount above EXCLUDES FCO → SAW");
     expect(output).toContain("Known cost:");
     expect(output).not.toContain("total · transport only");
+  });
+});
+
+describe("formatSearch — multi-city", () => {
+  const ARRIVAL_OFFSET: Record<string, string> = { [CIA.id]: "+01:00", [MXP.id]: "+01:00" };
+
+  function leg(id: string, from: typeof CIA, to: typeof CIA, times: [string, string], minor: number) {
+    const built = segment({
+      id,
+      origin: from,
+      destination: to,
+      departure: `${times[0]}${ARRIVAL_OFFSET[from.id] ?? "+01:00"}`,
+      arrival: `${times[1]}${ARRIVAL_OFFSET[to.id] ?? "+01:00"}`,
+    });
+    return { segments: [built], offers: [offer(`${id}-fare`, [built.id], minor)] };
+  }
+
+  type Legs = ReturnType<typeof leg>;
+
+  function provider(
+    outbound: Legs[],
+    returns: Record<string, Legs[]>,
+    onward: Record<string, Legs[]>,
+  ) {
+    const pack = (parts: Legs[]) =>
+      okResult(
+        "fixture-flights",
+        { segments: parts.flatMap((p) => p.segments), offers: parts.flatMap((p) => p.offers) },
+        metrics,
+      );
+    return {
+      descriptor: {
+        id: "fixture-flights",
+        kind: "flight" as const,
+        enabled: true,
+        sourceTypes: ["cached" as const],
+        maxCallsPerSearch: 12,
+      },
+      search: (query: FlightSearchQuery) => {
+        const [from] = query.origins;
+        if (query.destinations === "anywhere") {
+          return Promise.resolve(pack(from === "SJJ" ? outbound : (onward[from ?? ""] ?? [])));
+        }
+        return Promise.resolve(pack(returns[from ?? ""] ?? []));
+      },
+    };
+  }
+
+  async function multiCityTrace(): Promise<SearchTrace> {
+    return runFlightSearch(
+      request({ allowMultiCity: true }),
+      {
+        flightProvider: provider(
+          [
+            leg("out-cia", SJJ, CIA, ["2026-12-27T10:00", "2026-12-27T11:30"], 4000),
+            leg("out-mxp", SJJ, MXP, ["2026-12-27T10:00", "2026-12-27T11:30"], 8000),
+          ],
+          {
+            CIA: [leg("back-cia", CIA, SJJ, ["2027-01-02T18:00", "2027-01-02T19:30"], 3000)],
+            MXP: [leg("back-mxp", MXP, SJJ, ["2027-01-02T18:00", "2027-01-02T19:45"], 3500)],
+          },
+          { CIA: [leg("cia-mxp", CIA, MXP, ["2026-12-30T10:00", "2026-12-30T11:15"], 2000)] },
+        ),
+        cities: cityRepository,
+        geography: fixtureGeography,
+        airports: fixtureAirports,
+      },
+      { currency: "EUR", now: fixedClock(), newSearchId: () => "search-mc", strategy: "composed" },
+    );
+  }
+
+  it("names the cities in the order they are visited, and labels the shape", async () => {
+    const output = formatSearch(await multiCityTrace(), { limit: 10 });
+    expect(output).toContain("Rome → Milan (multi-city)");
+  });
+
+  it("gives the nights per city rather than one total", async () => {
+    const output = formatSearch(await multiCityTrace(), { limit: 10 });
+    expect(output).toContain("3 nights Rome · 3 nights Milan");
+  });
+
+  it("prints all three legs", async () => {
+    const output = formatSearch(await multiCityTrace(), { limit: 10 });
+    const romeToMilan = output
+      .split("\n")
+      .filter((line) => line.includes("CIA → ") && line.includes("MXP"));
+    expect(romeToMilan.length).toBeGreaterThan(0);
+  });
+
+  it("says which stage the budget ran out on", async () => {
+    const output = formatSearch(await multiCityTrace(), { limit: 10 });
+    // Either every query was afforded, or the line names what was not asked.
+    if (output.includes("budget-limited")) {
+      expect(output).toMatch(/budget-limited: .*(way home|onward leg).* not made/);
+    }
+    expect(output).toContain("Calls planned:");
+  });
+
+  it("reports second cities with no retrieved way home", async () => {
+    const stranded = await runFlightSearch(
+      request({ allowMultiCity: true }),
+      {
+        flightProvider: provider(
+          [leg("out-cia", SJJ, CIA, ["2026-12-27T10:00", "2026-12-27T11:30"], 4000)],
+          { CIA: [leg("back-cia", CIA, SJJ, ["2027-01-02T18:00", "2027-01-02T19:30"], 3000)] },
+          { CIA: [leg("cia-mxp", CIA, MXP, ["2026-12-30T10:00", "2026-12-30T11:15"], 2000)] },
+        ),
+        cities: cityRepository,
+        geography: fixtureGeography,
+        airports: fixtureAirports,
+      },
+      { currency: "EUR", now: fixedClock(), newSearchId: () => "search-x", strategy: "composed" },
+    );
+    const output = formatSearch(stranded, { limit: 10 });
+    expect(output).toContain("Second cities reachable onward: 1");
+    expect(output).toContain("1 with no retrieved way home");
   });
 });

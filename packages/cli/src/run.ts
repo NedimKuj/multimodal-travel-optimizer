@@ -72,7 +72,7 @@ function toSearchRequestInput(options: CliOptions): Record<string, unknown> {
     transportModes: ["flight"],
     allowOpenJaw: options.openJaw,
     // Multi-city is Phase 3b.
-    allowMultiCity: false,
+    allowMultiCity: options.multiCity,
     alternativeAirports: options.alternativeAirports,
   };
 }

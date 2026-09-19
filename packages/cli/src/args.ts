@@ -31,6 +31,8 @@ export interface CliOptions {
   readonly openJaw: boolean;
   /** Compose itineraries from one-way fares instead of round-trip fares. */
   readonly compose: boolean;
+  /** Allow a second city between the outbound and the way home. */
+  readonly multiCity: boolean;
   readonly limit: number;
   readonly json: boolean;
 }
@@ -67,6 +69,10 @@ Optional:
   --open-jaw             Allow flying home from a different city (implies
                          --compose). The sector between the two cities is left
                          unpriced: its cost is excluded and the output says so.
+  --multi-city           Allow a second city on the way (implies --compose).
+                         Each destination asked where it can go on to next
+                         costs provider calls from the same budget as the ways
+                         home, so fewer destinations are checked for one.
   --alternative-airports Also search nearby origin airports (off by default;
                          each one costs provider calls, and the itinerary then
                          includes the estimated transfer to reach it)
@@ -191,6 +197,7 @@ export function parseArguments(argv: readonly string[]): ParseArgumentsResult {
         "alternative-airports": { type: "boolean", default: false },
         "open-jaw": { type: "boolean", default: false },
         compose: { type: "boolean", default: false },
+        "multi-city": { type: "boolean", default: false },
         limit: { type: "string" },
         json: { type: "boolean", default: false },
         help: { type: "boolean", default: false },
@@ -251,8 +258,10 @@ export function parseArguments(argv: readonly string[]): ParseArgumentsResult {
       currency: resolvedCurrency,
       alternativeAirports: values["alternative-airports"],
       openJaw: values["open-jaw"],
-      // An open jaw can only be built from one-way fares.
-      compose: values.compose || values["open-jaw"],
+      // Neither an open jaw nor a second city can be built from round-trip
+      // fares, so both imply composition from one-way fares.
+      compose: values.compose || values["open-jaw"] || values["multi-city"],
+      multiCity: values["multi-city"],
       limit,
       json: values.json,
     },

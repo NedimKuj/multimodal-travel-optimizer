@@ -51,6 +51,7 @@ describe("parseArguments", () => {
       alternativeAirports: false,
       openJaw: false,
       compose: false,
+      multiCity: false,
       limit: 10,
       json: false,
     });
@@ -69,6 +70,15 @@ describe("parseArguments", () => {
     expect(parsed([...base, "--compose"]).openJaw).toBe(false);
   });
 
+  it("allows a second city on request, always composing from one-way fares", () => {
+    expect(parsed(base).multiCity).toBe(false);
+    expect(parsed([...base, "--multi-city"]).multiCity).toBe(true);
+    // A second city can only be reached by composing one-way fares.
+    expect(parsed([...base, "--multi-city"]).compose).toBe(true);
+    // And it is a separate choice from flying home from somewhere else.
+    expect(parsed([...base, "--multi-city"]).openJaw).toBe(false);
+  });
+
   it("keeps alternative airports off unless asked", () => {
     expect(parsed(base).alternativeAirports).toBe(false);
     expect(parsed([...base, "--alternative-airports"]).alternativeAirports).toBe(true);
@@ -84,6 +94,7 @@ describe("parseArguments", () => {
       alternativeAirports: false,
       openJaw: false,
       compose: false,
+      multiCity: false,
       limit: 10,
       json: false,
     });

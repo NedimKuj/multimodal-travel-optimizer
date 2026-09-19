@@ -31,8 +31,9 @@ function formatStops(segment: TransportSegment): string {
   return segment.transfers === 1 ? "1 stop" : `${String(segment.transfers)} stops`;
 }
 
-function formatStopCount(stops: number): string {
-  if (stops === 0) return "direct both ways";
+function formatStopCount(stops: number, pricedLegs: number): string {
+  // "Both ways" is only true of a trip with two legs.
+  if (stops === 0) return pricedLegs > 2 ? "direct on every leg" : "direct both ways";
   return stops === 1 ? "1 stop" : `${String(stops)} stops`;
 }
 
@@ -102,13 +103,34 @@ function formatDestination(destination: DestinationResult, index: number): strin
 
   const airports = destination.airports.map((airport) => airport.iata ?? airport.id).join(", ");
   const openJaw = best.summary.unpricedGaps.length > 0;
+  // More than one stay means the traveler slept in more than one place, which
+  // only a trip of three legs or more does. An open jaw has two cities but one
+  // stay, because the sector between them has no times to divide it by.
+  const multiCity = best.nightsByStay.length > 1;
+  const shape = [multiCity ? "multi-city" : "", openJaw ? "open jaw" : ""].filter(
+    (entry) => entry !== "",
+  );
   const cityNames = destination.cities.map((city) => city.name);
   const name =
     cityNames.length === 0
       ? `${destination.airports[0]?.name ?? "Unknown"} (airport only)`
       : cityNames.length > 1
-        ? `${cityNames.join(" → ")}${openJaw ? " (open jaw)" : ""}`
+        ? `${cityNames.join(" → ")}${shape.length > 0 ? ` (${shape.join(", ")})` : ""}`
         : `${cityNames[0] ?? ""} (${destination.cities[0]?.countryCode ?? ""})`;
+
+  const pricedLegs = best.candidate.segments.filter(
+    (leg) => leg.mode !== "ground_transfer",
+  ).length;
+  const nights = (count: number) => `${String(count)} night${count === 1 ? "" : "s"}`;
+  // Names are attached only when there is one per stay. A trip that flies home
+  // from a third city has more cities than stays, so its nights are reported
+  // without them rather than against the wrong one.
+  const nightsSummary =
+    multiCity && cityNames.length === best.nightsByStay.length
+      ? best.nightsByStay
+          .map((count, index) => `${nights(count)} ${cityNames[index] ?? ""}`)
+          .join(" · ")
+      : nights(best.nights);
 
   const lines = [
     `${String(index + 1)}. ${name} — ${airports}`,
@@ -130,7 +152,7 @@ function formatDestination(destination: DestinationResult, index: number): strin
     // Only in-segment stops are shown. `connections` counts changes with no
     // stay in between (ADR 0005), and until accommodation exists every trip
     // has one for its destination stay, which is not a transfer.
-    `   ${String(best.nights)} nights · ${formatDuration(best.summary.travelTimeMinutes)} travelling · ${formatStopCount(best.summary.stops)}`,
+    `   ${nightsSummary} · ${formatDuration(best.summary.travelTimeMinutes)} travelling · ${formatStopCount(best.summary.stops, pricedLegs)}`,
   ];
 
   for (const segment of best.candidate.segments) {
@@ -226,8 +248,31 @@ export function formatSearch(trace: SearchTrace, options: FormatOptions): string
       `Destinations checked for a way home: ${String(trace.discovery.enriched.length)} (${String(withReturns)} had one)` +
         (reasons.length > 0 ? ` · ${reasons.join(" · ")}` : ""),
     );
+    if (counts.secondCitiesReached > 0) {
+      lines.push(
+        `Second cities reachable onward: ${String(counts.secondCitiesReached)}` +
+          (counts.secondCitiesWithoutReturn > 0
+            ? ` (${String(counts.secondCitiesWithoutReturn)} with no retrieved way home)`
+            : ""),
+      );
+    }
+    // Which stage ran out, not just that something did: a search short of ways
+    // home and one short of onward legs are thin for different reasons.
+    const hungry = (["return", "onward"] as const)
+      .map((stage) => ({
+        stage,
+        count: (trace.discovery?.skipped ?? []).filter(
+          (entry) => entry.stage === stage && entry.reason === "call_budget",
+        ).length,
+      }))
+      .filter((entry) => entry.count > 0)
+      .map(
+        (entry) =>
+          `${String(entry.count)} ${entry.stage === "return" ? "way home" : "onward leg"} quer${entry.count === 1 ? "y" : "ies"}`,
+      );
     lines.push(
-      `Calls planned: ${String(trace.discovery.callsPlanned)} of ${String(trace.discovery.callBudget)} budget`,
+      `Calls planned: ${String(trace.discovery.callsPlanned)} of ${String(trace.discovery.callBudget)} budget` +
+        (hungry.length > 0 ? ` · budget-limited: ${hungry.join(", ")} not made` : ""),
     );
   }
   const rejected = [
@@ -243,6 +288,9 @@ export function formatSearch(trace: SearchTrace, options: FormatOptions): string
       : "",
     counts.rejectedReturnBeforeArrival > 0
       ? `${String(counts.rejectedReturnBeforeArrival)} return before arrival`
+      : "",
+    counts.rejectedStayTooShort > 0
+      ? `${String(counts.rejectedStayTooShort)} passed through a city without stopping`
       : "",
     counts.rejectedInvalid > 0 ? `${String(counts.rejectedInvalid)} unusable` : "",
   ].filter((entry) => entry !== "");
