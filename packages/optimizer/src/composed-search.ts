@@ -173,7 +173,6 @@ export async function exploreComposedItineraries(
     request,
     window,
     context,
-    geography: deps.geography,
     ...(options.composition !== undefined && { config: options.composition }),
   });
 

@@ -1,7 +1,4 @@
 import {
-  type AirportGeography,
-  type ItineraryGap,
-  type Location,
   type SearchRequest,
   type TransportOffer,
   type TransportSegment,
@@ -103,24 +100,7 @@ export interface ComposeInput {
   readonly request: SearchRequest;
   readonly window: TravelWindow;
   readonly context: CandidateContext;
-  readonly geography: AirportGeography;
   readonly config?: CompositionConfig;
-}
-
-function gapBetween(
-  from: Location,
-  to: Location,
-  geography: AirportGeography,
-): ItineraryGap {
-  const distanceKm = geography.distanceBetween(from, to);
-  return {
-    id: `gap:${from.id}->${to.id}`,
-    from,
-    to,
-    ...(Number.isFinite(distanceKm) && distanceKm > 0 ? { distanceKm } : {}),
-    status: "unpriced",
-    reason: "no_licensed_source",
-  };
 }
 
 /**
@@ -131,7 +111,7 @@ function gapBetween(
  */
 export function composeItineraries(input: ComposeInput): CompositionResult {
   const config = input.config ?? DEFAULT_COMPOSITION_CONFIG;
-  const { discovery, geography } = input;
+  const { discovery } = input;
 
   const outboundByAirport = groupByAirport(
     oneWayLegs(discovery.outboundSegments, discovery.outboundOffers),
@@ -171,9 +151,7 @@ export function composeItineraries(input: ComposeInput): CompositionResult {
   const arrivalAirports = [...outboundByAirport.keys()].sort();
   for (const arrivalId of arrivalAirports) {
     const outbounds = rankLegs(outboundByAirport.get(arrivalId) ?? [], config.maxOffersPerAirport);
-    const [sample] = outbounds;
-    if (sample === undefined) continue;
-    const arrival = sample.segment.destination;
+    if (outbounds.length === 0) continue;
 
     // Destinations with no way home are counted from the discovery record,
     // which knows about every destination, not just the ones reached here.
@@ -182,22 +160,12 @@ export function composeItineraries(input: ComposeInput): CompositionResult {
     for (const outbound of outbounds) {
       for (const departureId of departureAirports) {
         const returns = returnByAirport.get(departureId) ?? [];
-        const [returnSample] = returns;
-        if (returnSample === undefined) continue;
-        const departurePoint = returnSample.segment.origin;
+        if (returns.length === 0) continue;
 
-        // Same airport: an ordinary composed round trip, nothing unpriced.
-        const isRoundTrip = departureId === arrivalId;
-        let gaps: ItineraryGap[] = [];
-        if (!isRoundTrip) {
-          if (!input.request.allowOpenJaw) continue;
-          const gap = gapBetween(arrival, departurePoint, geography);
-          if (gap.distanceKm === undefined || gap.distanceKm > config.maxUnpricedGapKm) {
-            counts.rejectedGapTooFar = (counts.rejectedGapTooFar ?? 0) + 1;
-            continue;
-          }
-          gaps = [gap];
-        }
+        // Flying home from somewhere else is only on offer when it was asked
+        // for. How far that sector stretches is judged during assembly, where
+        // the transfers that decide its endpoints are known.
+        if (departureId !== arrivalId && !input.request.allowOpenJaw) continue;
 
         for (const homeward of returns) {
           // A way home that leaves before the outbound lands is rejected inside
@@ -207,10 +175,10 @@ export function composeItineraries(input: ComposeInput): CompositionResult {
               id: `trip:${outbound.offer.id}+${homeward.offer.id}`,
               legs: [outbound.segment, homeward.segment],
               offers: [outbound.offer, homeward.offer],
-              gaps,
               request: input.request,
               window: input.window,
               context: input.context,
+              maxUnpricedGapKm: config.maxUnpricedGapKm,
             }),
           );
         }

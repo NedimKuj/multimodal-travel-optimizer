@@ -73,7 +73,6 @@ function assemble(legs: readonly TransportSegment[], overrides: Record<string, u
     id: `trip:${legs.map((leg) => leg.id).join("+")}`,
     legs,
     offers: legs.map((leg, index) => offer(`fare-${leg.id}`, [leg.id], 3000 + index * 100)),
-    gaps: [],
     request: request(overrides),
     window: windowFor(overrides),
     context,
@@ -139,6 +138,79 @@ describe("assembleCandidate — leg counts", () => {
   it("refuses fewer than two legs", () => {
     const outcome = assemble([outbound]);
     expect(outcome).toEqual({ ok: false, counter: "rejectedInvalid" });
+  });
+});
+
+describe("assembleCandidate — transfers attach per stay", () => {
+  /** Malpensa is 50 km from Milan, so legs touching it carry transfers. */
+  const intoMilan = segment({
+    id: "out-mxp",
+    origin: SJJ,
+    destination: MXP,
+    departure: "2026-12-27T10:00+01:00",
+    arrival: "2026-12-27T11:30+01:00",
+  });
+
+  it("carries the traveler in from the airport they land at", () => {
+    const outcome = assemble([intoMilan, homeFromMilan]);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    const transfers = outcome.attempt.candidate.segments.filter(
+      (leg) => leg.mode === "ground_transfer",
+    );
+    expect(transfers.map((leg) => [leg.origin.iata, leg.destination.iata])).toEqual([
+      ["MXP", "MIL"],
+      ["MIL", "MXP"],
+    ]);
+  });
+
+  it("takes them back out to the airport they actually leave from", () => {
+    // The bug this replaces: the return-side transfer was built from the
+    // arrival airport, so an open jaw produced a ride back to Milan's airport
+    // followed by a departure from Rome, with nothing in between.
+    const outcome = assemble([intoMilan, homeFromRome], { allowOpenJaw: true });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    const transfers = outcome.attempt.candidate.segments.filter(
+      (leg) => leg.mode === "ground_transfer",
+    );
+    // Into Milan on arrival, and nothing more: Ciampino is close to Rome, so
+    // the traveler needs no ride out to it.
+    expect(transfers.map((leg) => [leg.origin.iata, leg.destination.iata])).toEqual([
+      ["MXP", "MIL"],
+    ]);
+    expect(
+      transfers.some((leg) => leg.destination.iata === "MXP"),
+    ).toBe(false);
+  });
+
+  it("runs the unpriced sector from where the traveler is to where they need to be", () => {
+    const outcome = assemble([intoMilan, homeFromRome], { allowOpenJaw: true });
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    const [gap] = outcome.attempt.candidate.gaps;
+    // Milan, not Malpensa: the transfer already took them into the city.
+    expect(gap).toMatchObject({ from: { iata: "MIL" }, to: { iata: "CIA" } });
+  });
+
+  it("leaves no gap when the trip departs from where it landed", () => {
+    const outcome = assemble([intoMilan, homeFromMilan]);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.attempt.candidate.gaps).toEqual([]);
+  });
+
+  it("refuses a sector too far to be a journey the traveler could arrange", () => {
+    const outcome = assembleCandidate({
+      id: "trip:too-far",
+      legs: [intoMilan, homeFromRome],
+      offers: [offer("fare-out", [intoMilan.id], 3000), offer("fare-home", [homeFromRome.id], 3000)],
+      request: request({ allowOpenJaw: true }),
+      window: windowFor({ allowOpenJaw: true }),
+      context,
+      maxUnpricedGapKm: 100,
+    });
+    expect(outcome).toEqual({ ok: false, counter: "rejectedGapTooFar" });
   });
 });
 

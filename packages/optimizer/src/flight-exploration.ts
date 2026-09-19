@@ -229,80 +229,180 @@ export interface CandidateContext {
   readonly fetchedAt: ReturnType<typeof parseUtcInstant>;
 }
 
+/** What one junction between two legs looks like once transfers are attached. */
+export interface StayBoundary {
+  /** The segment whose arrival puts the traveler where they stay. */
+  readonly reached: TransportSegment;
+  /** The segment whose departure takes them away again. */
+  readonly left: TransportSegment;
+  /** Where the traveler is while they stay: the city, or the airport itself. */
+  readonly place: Location;
+  /** Set when the traveler makes their own way between two places (ADR 0014). */
+  readonly gap?: ItineraryGap;
+}
+
 export interface AccessTransfers {
   readonly segments: TransportSegment[];
   readonly offers: TransportOffer[];
-  /** Where the traveler actually is at each end of the stay. */
-  readonly arrivalInCity?: TransportSegment;
-  readonly departureFromCity?: TransportSegment;
+  /** One per junction between consecutive legs, in travel order. */
+  readonly stays: readonly StayBoundary[];
+}
+
+/** A transfer, plus where it leaves the traveler. */
+interface TransferSide {
+  /** Where the traveler is once the airport is behind them. */
+  readonly place: Location;
+  readonly leg?: { readonly segment: TransportSegment; readonly offer: TransportOffer };
 }
 
 /**
- * Adds transfers between an airport and its city when the airport is far
- * enough away to matter (ADR 0011), so a cheap fare into a distant airport is
- * compared on the same footing as a dearer one into a close airport.
+ * Carries the traveler from the airport they land at into its city, when the
+ * airport is far enough away to matter (ADR 0011).
  *
- * Buffers come from the connection rules, not a fixed figure: a bus arriving
- * at a terminal must still leave the airport's check-in time (ADR 0012 §4).
+ * Buffers come from the connection rules, not a fixed figure: stepping off a
+ * flight onto a bus is not the same as connecting between flights (ADR 0012 §4).
  */
-export function buildAccessTransfers(
-  outbound: TransportSegment,
-  inbound: TransportSegment,
+function transferIntoCity(
+  arriving: TransportSegment,
   request: SearchRequest,
   context: CandidateContext,
-): AccessTransfers {
-  const airport = outbound.destination;
+): TransferSide {
+  const airport = arriving.destination;
   const lookup = lookupCityForAirport(context.cities, airport);
-  if (!lookup.ok) return { segments: [], offers: [] };
+  if (!lookup.ok) return { place: airport };
 
   const city = lookup.city;
   const distanceKm = context.geography.distanceBetween(airport, city);
-  if (!needsAccessTransfer(distanceKm, context.groundTransfer)) {
-    return { segments: [], offers: [] };
-  }
+  if (!needsAccessTransfer(distanceKm, context.groundTransfer)) return { place: airport };
 
-  const bufferAfterArrival = requiredConnectionMinutes(airport, airport, context.connectionRules, {
-    arrivingBy: outbound.mode,
+  const buffer = requiredConnectionMinutes(airport, airport, context.connectionRules, {
+    arrivingBy: arriving.mode,
     departingBy: "ground_transfer",
   });
-  const bufferBeforeDeparture = requiredConnectionMinutes(
-    airport,
-    airport,
-    context.connectionRules,
-    { arrivingBy: "ground_transfer", departingBy: inbound.mode },
-  );
-  if (!bufferAfterArrival.ok || !bufferBeforeDeparture.ok) return { segments: [], offers: [] };
-
-  const intoCity = buildGroundTransferLeg({
-    id: `${outbound.id}:access-in`,
-    from: airport,
-    to: city,
-    distanceKm,
-    travelers: request.travelers,
-    anchor: outbound.arrivalAt,
-    anchorRole: "depart_after",
-    bufferMinutes: bufferAfterArrival.minutes,
-    fetchedAt: context.fetchedAt,
-    config: context.groundTransfer,
-  });
-  const backToAirport = buildGroundTransferLeg({
-    id: `${inbound.id}:access-out`,
-    from: city,
-    to: airport,
-    distanceKm,
-    travelers: request.travelers,
-    anchor: inbound.departureAt,
-    anchorRole: "arrive_before",
-    bufferMinutes: bufferBeforeDeparture.minutes,
-    fetchedAt: context.fetchedAt,
-    config: context.groundTransfer,
-  });
+  if (!buffer.ok) return { place: airport };
 
   return {
-    segments: [intoCity.segment, backToAirport.segment],
-    offers: [intoCity.offer, backToAirport.offer],
-    arrivalInCity: intoCity.segment,
-    departureFromCity: backToAirport.segment,
+    place: city,
+    leg: buildGroundTransferLeg({
+      id: `${arriving.id}:access-in`,
+      from: airport,
+      to: city,
+      distanceKm,
+      travelers: request.travelers,
+      anchor: arriving.arrivalAt,
+      anchorRole: "depart_after",
+      bufferMinutes: buffer.minutes,
+      fetchedAt: context.fetchedAt,
+      config: context.groundTransfer,
+    }),
+  };
+}
+
+/** The mirror of `transferIntoCity`: back out to the airport they leave from. */
+function transferToAirport(
+  leaving: TransportSegment,
+  request: SearchRequest,
+  context: CandidateContext,
+): TransferSide {
+  const airport = leaving.origin;
+  const lookup = lookupCityForAirport(context.cities, airport);
+  if (!lookup.ok) return { place: airport };
+
+  const city = lookup.city;
+  const distanceKm = context.geography.distanceBetween(airport, city);
+  if (!needsAccessTransfer(distanceKm, context.groundTransfer)) return { place: airport };
+
+  const buffer = requiredConnectionMinutes(airport, airport, context.connectionRules, {
+    arrivingBy: "ground_transfer",
+    departingBy: leaving.mode,
+  });
+  if (!buffer.ok) return { place: airport };
+
+  return {
+    place: city,
+    leg: buildGroundTransferLeg({
+      id: `${leaving.id}:access-out`,
+      from: city,
+      to: airport,
+      distanceKm,
+      travelers: request.travelers,
+      anchor: leaving.departureAt,
+      anchorRole: "arrive_before",
+      bufferMinutes: buffer.minutes,
+      fetchedAt: context.fetchedAt,
+      config: context.groundTransfer,
+    }),
+  };
+}
+
+/**
+ * Attaches access transfers per stay, and derives the gaps between them.
+ *
+ * Each junction is handled on its own terms: the traveler lands at one airport
+ * and leaves from another, which for a round trip is the same airport and for
+ * an open jaw is not. Deriving both sides separately is what keeps an open jaw
+ * honest — the sector the traveler arranges themselves then runs from where
+ * they actually are to where they actually need to be, which is city to city
+ * when both airports are far out, and asymmetric when only one is.
+ */
+export function buildAccessTransfers(
+  legs: readonly TransportSegment[],
+  request: SearchRequest,
+  context: CandidateContext,
+): AccessTransfers {
+  const segments: TransportSegment[] = [];
+  const offers: TransportOffer[] = [];
+  const stays: StayBoundary[] = [];
+
+  for (let index = 0; index + 1 < legs.length; index += 1) {
+    const arriving = legs[index];
+    const leaving = legs[index + 1];
+    if (arriving === undefined || leaving === undefined) continue;
+
+    const inbound = transferIntoCity(arriving, request, context);
+    const outbound = transferToAirport(leaving, request, context);
+    for (const side of [inbound, outbound]) {
+      if (side.leg === undefined) continue;
+      segments.push(side.leg.segment);
+      offers.push(side.leg.offer);
+    }
+
+    const reached = inbound.leg?.segment ?? arriving;
+    const left = outbound.leg?.segment ?? leaving;
+    // Same airport both ways: one place, nothing to bridge. Different airports:
+    // the traveler crosses between them on their own (ADR 0014).
+    const continuous = reached.destination.id === left.origin.id;
+    stays.push({
+      reached,
+      left,
+      place: inbound.place,
+      ...(continuous
+        ? {}
+        : { gap: gapBetween(reached.destination, left.origin, context.geography) }),
+    });
+  }
+
+  return { segments, offers, stays };
+}
+
+/** How far an unpriced sector may stretch before a pairing stops being plausible. */
+export const DEFAULT_MAX_UNPRICED_GAP_KM = 800;
+
+/**
+ * Records a sector we cannot price: both endpoints, the distance, and why.
+ *
+ * Never a segment and never an offer, because we know neither its times nor
+ * its price, and inventing either would be a fabrication (ADR 0014 §1).
+ */
+function gapBetween(from: Location, to: Location, geography: AirportGeography): ItineraryGap {
+  const distanceKm = geography.distanceBetween(from, to);
+  return {
+    id: `gap:${from.id}->${to.id}`,
+    from,
+    to,
+    ...(Number.isFinite(distanceKm) && distanceKm > 0 ? { distanceKm } : {}),
+    status: "unpriced",
+    reason: "no_licensed_source",
   };
 }
 
@@ -317,7 +417,7 @@ export function buildOriginTransfers(
   inbound: TransportSegment,
   request: SearchRequest,
   context: CandidateContext,
-): AccessTransfers {
+): { segments: TransportSegment[]; offers: TransportOffer[] } {
   const requested = context.requestedOrigin;
   if (outbound.origin.id === requested.id) return { segments: [], offers: [] };
 
@@ -385,7 +485,6 @@ function buildCandidate(
     id: `trip:${offer.id}`,
     legs: [outbound, inbound],
     offers: [offer],
-    gaps: [],
     request,
     window,
     context,
@@ -400,11 +499,14 @@ export interface AssembleCandidateInput {
    */
   readonly legs: readonly TransportSegment[];
   readonly offers: readonly TransportOffer[];
-  /** Sectors the traveler arranges themselves (ADR 0014). */
-  readonly gaps: readonly ItineraryGap[];
   readonly request: SearchRequest;
   readonly window: TravelWindow;
   readonly context: CandidateContext;
+  /**
+   * How far a sector the traveler arranges themselves may stretch. Derived
+   * gaps beyond it are not offered at all rather than offered with a caveat.
+   */
+  readonly maxUnpricedGapKm?: number;
 }
 
 /**
@@ -451,7 +553,18 @@ export function assembleCandidate(input: AssembleCandidateInput): AttemptOutcome
     }
   }
 
-  const access = buildAccessTransfers(outbound, inbound, request, context);
+  const access = buildAccessTransfers(legs, request, context);
+
+  // The gap's endpoints depend on which transfers exist, so its distance can
+  // only be judged here — and the distance judged is the one reported.
+  const ceiling = input.maxUnpricedGapKm ?? DEFAULT_MAX_UNPRICED_GAP_KM;
+  const gaps = access.stays.flatMap((stay) => (stay.gap === undefined ? [] : [stay.gap]));
+  for (const gap of gaps) {
+    if (gap.distanceKm === undefined || gap.distanceKm > ceiling) {
+      return { ok: false, counter: "rejectedGapTooFar" };
+    }
+  }
+
   const originAccess = buildOriginTransfers(outbound, inbound, request, context);
   const allSegments = [...legs, ...access.segments, ...originAccess.segments].sort((a, b) =>
     a.departureAt.instant < b.departureAt.instant
@@ -463,7 +576,7 @@ export function assembleCandidate(input: AssembleCandidateInput): AttemptOutcome
   const first = allSegments[0];
   if (first === undefined) return { ok: false, counter: "rejectedInvalid" };
 
-  const feasibility = validateConnections(allSegments, context.connectionRules, input.gaps);
+  const feasibility = validateConnections(allSegments, context.connectionRules, gaps);
   if (!feasibility.ok) {
     return {
       ok: false,
@@ -482,7 +595,7 @@ export function assembleCandidate(input: AssembleCandidateInput): AttemptOutcome
     segments: allSegments,
     offers: [...input.offers, ...access.offers, ...originAccess.offers],
     stays: [],
-    gaps: [...input.gaps],
+    gaps,
   };
 
   const summarized = summarizeTrip(candidate);
@@ -498,26 +611,15 @@ export function assembleCandidate(input: AssembleCandidateInput): AttemptOutcome
   }
 
   // The window bounds the flights the traveler asked for; nights count time on
-  // the ground, which a transfer shifts (spec §8, §9). One stay per junction:
-  // the traveler arrives somewhere, sleeps, and leaves again.
-  const stays: { groundStart: ReturnType<typeof localDate>; groundEnd: ReturnType<typeof localDate> }[] =
-    [];
-  for (let index = 0; index + 1 < legs.length; index += 1) {
-    const arriving = legs[index];
-    const leaving = legs[index + 1];
-    if (arriving === undefined || leaving === undefined) continue;
-    const reached = index === 0 ? (access.arrivalInCity ?? arriving) : arriving;
-    const left = index + 2 === legs.length ? (access.departureFromCity ?? leaving) : leaving;
-    stays.push({
-      groundStart: localDate(reached.arrivalAt),
-      groundEnd: localDate(left.departureAt),
-    });
-  }
-
+  // the ground, which a transfer shifts (spec §8, §9). Each stay runs from the
+  // moment they reach the place to the moment they leave it.
   const evaluation = evaluateTrip(window, {
     tripStart: localDate(outbound.departureAt),
     tripEnd: localDate(inbound.departureAt),
-    stays,
+    stays: access.stays.map((stay) => ({
+      groundStart: localDate(stay.reached.arrivalAt),
+      groundEnd: localDate(stay.left.departureAt),
+    })),
   });
   if (!evaluation.ok) {
     return {

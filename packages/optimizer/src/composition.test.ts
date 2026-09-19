@@ -140,13 +140,35 @@ describe("open jaw (pattern 2)", () => {
       .flatMap((destination) => destination.candidates)
       .find((candidate) => candidate.summary.unpricedGaps.length > 0);
     const [gap] = openJaw?.summary.unpricedGaps ?? [];
+    // Fiumicino is far enough out to need a transfer, so the itinerary leaves
+    // the traveler in Rome and the sector starts there. Ciampino is close in,
+    // so it ends at the airport: the geography is asymmetric, and so is the gap.
     expect(gap).toMatchObject({
-      from: { iata: "FCO" },
+      from: { iata: "ROM" },
       to: { iata: "CIA" },
       status: "unpriced",
       reason: "no_licensed_source",
     });
     expect(gap?.distanceKm).toBeGreaterThan(0);
+  });
+
+  it("starts the sector where the last priced segment leaves the traveler", async () => {
+    const result = await exploreComposedItineraries(
+      request({ allowOpenJaw: true }),
+      deps(twoCities),
+      options,
+    );
+    const openJaw = result.destinations
+      .flatMap((destination) => destination.candidates)
+      .find((candidate) => candidate.summary.unpricedGaps.length > 0);
+    const [gap] = openJaw?.summary.unpricedGaps ?? [];
+    // Nothing teleports: whatever the itinerary's last stop before the gap is,
+    // the gap begins there, and the next segment begins where the gap ends.
+    const before = openJaw?.candidate.segments.filter(
+      (segment) => segment.destination.id === gap?.from.id,
+    );
+    expect(before?.length).toBeGreaterThan(0);
+    expect(openJaw?.candidate.segments.at(-1)?.origin.id).toBe(gap?.to.id);
   });
 
   it("excludes the gap from the amount and says so", async () => {
