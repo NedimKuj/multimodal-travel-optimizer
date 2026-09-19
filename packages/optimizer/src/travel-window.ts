@@ -114,22 +114,34 @@ export function resolveTravelWindow(request: SearchRequest): ResolveTravelWindow
   };
 }
 
+/** One period on the ground between two legs: where the traveler sleeps. */
+export interface StayDates {
+  /** Local date the traveler reaches where they are staying. */
+  readonly groundStart: LocalDate;
+  /** Local date they leave it. */
+  readonly groundEnd: LocalDate;
+}
+
 /** The dates of a candidate trip, in the local time of each place. */
 export interface TripDates {
-  /** Local date the outbound departs. */
+  /** Local date the first fare segment departs. */
   readonly tripStart: LocalDate;
-  /** Local date the outbound arrives; nights on the ground start here. */
-  readonly groundStart: LocalDate;
-  /** Local date the return departs; nights on the ground end here. */
-  readonly groundEnd: LocalDate;
-  /** Local date the return arrives. */
+  /** Local date the last fare segment departs. */
   readonly tripEnd: LocalDate;
+  /** One per place the traveler stops between legs, in order. */
+  readonly stays: readonly StayDates[];
 }
 
 export type TripRejection = "outside_window" | "nights_out_of_range";
 
 export type TripEvaluation =
-  | { readonly ok: true; readonly nights: number }
+  | {
+      readonly ok: true;
+      /** Nights on the ground, summed across stays. */
+      readonly nights: number;
+      /** Nights per stay, in the order the traveler visits them. */
+      readonly nightsByStay: readonly number[];
+    }
   | { readonly ok: false; readonly reason: TripRejection };
 
 function within(date: LocalDate, range: LocalDateRange): boolean {
@@ -141,12 +153,17 @@ function within(date: LocalDate, range: LocalDateRange): boolean {
  * so each rejection can be counted.
  */
 export function evaluateTrip(window: TravelWindow, dates: TripDates): TripEvaluation {
-  const nights = daysBetween(dates.groundStart, dates.groundEnd);
+  const nightsByStay = dates.stays.map((stay) => daysBetween(stay.groundStart, stay.groundEnd));
+  // Nights belong to stays, not to the span from first leg to last: a night
+  // spent crossing between two cities is a night in neither (spec §9).
+  const nights = nightsByStay.reduce((total, stay) => total + stay, 0);
 
+  // The traveler is home once they leave the last place they stayed.
+  const lastGroundEnd = dates.stays.at(-1)?.groundEnd ?? dates.tripEnd;
   const insideWindow =
     window.mode === "window"
       ? within(dates.tripStart, window.outerBounds) && within(dates.tripEnd, window.outerBounds)
-      : within(dates.tripStart, window.departure) && within(dates.groundEnd, window.return);
+      : within(dates.tripStart, window.departure) && within(lastGroundEnd, window.return);
   if (!insideWindow) {
     return { ok: false, reason: "outside_window" };
   }
@@ -157,5 +174,5 @@ export function evaluateTrip(window: TravelWindow, dates: TripDates): TripEvalua
   if (window.maxNights !== undefined && nights > window.maxNights) {
     return { ok: false, reason: "nights_out_of_range" };
   }
-  return { ok: true, nights };
+  return { ok: true, nights, nightsByStay };
 }

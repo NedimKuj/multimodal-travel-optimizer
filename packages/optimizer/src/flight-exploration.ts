@@ -1,6 +1,7 @@
 import {
   budgetTotal,
   compareMoney,
+  compareZonedTimestamps,
   localDate,
   lookupCityForAirport,
   parseUtcInstant,
@@ -58,7 +59,10 @@ import { evaluateTrip, resolveTravelWindow, type TravelWindow } from "./travel-w
 export interface RankedCandidate {
   readonly candidate: TripCandidate;
   readonly summary: TripSummary;
+  /** Nights on the ground, summed across stays. */
   readonly nights: number;
+  /** Nights per stay, in visit order; one entry for a round trip (spec §9). */
+  readonly nightsByStay: readonly number[];
 }
 
 export interface DestinationResult {
@@ -206,6 +210,8 @@ export interface CandidateAttempt {
   readonly candidate: TripCandidate;
   readonly summary: TripSummary;
   readonly nights: number;
+  /** Nights per stay, in visit order (spec §9). */
+  readonly nightsByStay: readonly number[];
   /** Airports the traveler visits, in order: one for a round trip, two for an open jaw. */
   readonly destinationAirports: readonly Location[];
 }
@@ -377,8 +383,7 @@ function buildCandidate(
 
   return assembleCandidate({
     id: `trip:${offer.id}`,
-    outbound,
-    inbound,
+    legs: [outbound, inbound],
     offers: [offer],
     gaps: [],
     request,
@@ -389,8 +394,11 @@ function buildCandidate(
 
 export interface AssembleCandidateInput {
   readonly id: string;
-  readonly outbound: TransportSegment;
-  readonly inbound: TransportSegment;
+  /**
+   * The priced legs in travel order: two for a round trip, three or more for a
+   * multi-city trip.
+   */
+  readonly legs: readonly TransportSegment[];
   readonly offers: readonly TransportOffer[];
   /** Sectors the traveler arranges themselves (ADR 0014). */
   readonly gaps: readonly ItineraryGap[];
@@ -400,16 +408,52 @@ export interface AssembleCandidateInput {
 }
 
 /**
+ * The airports a traveler passes through between legs.
+ *
+ * One entry per junction for a trip that leaves from where it landed, two where
+ * it does not — an open jaw's arrival and departure airports are both visited.
+ */
+function visitedAirports(legs: readonly TransportSegment[]): Location[] {
+  const visited: Location[] = [];
+  for (let index = 0; index + 1 < legs.length; index += 1) {
+    const arriving = legs[index];
+    const leaving = legs[index + 1];
+    if (arriving === undefined || leaving === undefined) continue;
+    visited.push(arriving.destination);
+    if (arriving.destination.id !== leaving.origin.id) visited.push(leaving.origin);
+  }
+  return visited;
+}
+
+/**
  * Finishes a candidate: access transfers, feasibility, window, nights, budget.
  *
  * Shared by provider round trips and itineraries composed from one-way fares,
  * so both are judged by exactly the same rules.
  */
 export function assembleCandidate(input: AssembleCandidateInput): AttemptOutcome {
-  const { outbound, inbound, request, window, context } = input;
+  const { legs, request, window, context } = input;
+  const outbound = legs[0];
+  const inbound = legs.at(-1);
+  if (outbound === undefined || inbound === undefined || legs.length < 2) {
+    return { ok: false, counter: "rejectedInvalid" };
+  }
+
+  // Every leg must leave after the one before it lands. Assembly sorts segments
+  // by instant, so an out-of-order set would otherwise sort into a spatially
+  // broken chain and be rejected as a discontinuity, which explains nothing.
+  for (let index = 0; index + 1 < legs.length; index += 1) {
+    const arriving = legs[index];
+    const leaving = legs[index + 1];
+    if (arriving === undefined || leaving === undefined) continue;
+    if (compareZonedTimestamps(leaving.departureAt, arriving.arrivalAt) <= 0) {
+      return { ok: false, counter: "rejectedReturnBeforeArrival" };
+    }
+  }
+
   const access = buildAccessTransfers(outbound, inbound, request, context);
   const originAccess = buildOriginTransfers(outbound, inbound, request, context);
-  const allSegments = [outbound, inbound, ...access.segments, ...originAccess.segments].sort((a, b) =>
+  const allSegments = [...legs, ...access.segments, ...originAccess.segments].sort((a, b) =>
     a.departureAt.instant < b.departureAt.instant
       ? -1
       : a.departureAt.instant > b.departureAt.instant
@@ -453,13 +497,27 @@ export function assembleCandidate(input: AssembleCandidateInput): AttemptOutcome
     };
   }
 
-  // The window bounds the flights the traveler asked for; nights count time in
-  // the destination city, which a transfer shifts (spec §8, §9).
+  // The window bounds the flights the traveler asked for; nights count time on
+  // the ground, which a transfer shifts (spec §8, §9). One stay per junction:
+  // the traveler arrives somewhere, sleeps, and leaves again.
+  const stays: { groundStart: ReturnType<typeof localDate>; groundEnd: ReturnType<typeof localDate> }[] =
+    [];
+  for (let index = 0; index + 1 < legs.length; index += 1) {
+    const arriving = legs[index];
+    const leaving = legs[index + 1];
+    if (arriving === undefined || leaving === undefined) continue;
+    const reached = index === 0 ? (access.arrivalInCity ?? arriving) : arriving;
+    const left = index + 2 === legs.length ? (access.departureFromCity ?? leaving) : leaving;
+    stays.push({
+      groundStart: localDate(reached.arrivalAt),
+      groundEnd: localDate(left.departureAt),
+    });
+  }
+
   const evaluation = evaluateTrip(window, {
     tripStart: localDate(outbound.departureAt),
-    groundStart: localDate((access.arrivalInCity ?? outbound).arrivalAt),
-    groundEnd: localDate((access.departureFromCity ?? inbound).departureAt),
     tripEnd: localDate(inbound.departureAt),
+    stays,
   });
   if (!evaluation.ok) {
     return {
@@ -493,10 +551,8 @@ export function assembleCandidate(input: AssembleCandidateInput): AttemptOutcome
       candidate,
       summary: summarized.summary,
       nights: evaluation.nights,
-      destinationAirports:
-        outbound.destination.id === inbound.origin.id
-          ? [outbound.destination]
-          : [outbound.destination, inbound.origin],
+      nightsByStay: evaluation.nightsByStay,
+      destinationAirports: visitedAirports(legs),
     },
   };
 }
@@ -567,6 +623,7 @@ export function groupByDestination(
       candidate: attempt.candidate,
       summary: attempt.summary,
       nights: attempt.nights,
+      nightsByStay: attempt.nightsByStay,
     });
   }
 

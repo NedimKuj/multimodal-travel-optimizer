@@ -1,5 +1,4 @@
 import {
-  compareZonedTimestamps,
   type AirportGeography,
   type ItineraryGap,
   type Location,
@@ -201,18 +200,12 @@ export function composeItineraries(input: ComposeInput): CompositionResult {
         }
 
         for (const homeward of returns) {
-          // A way home that leaves before the outbound lands is not a trip.
-          if (
-            compareZonedTimestamps(homeward.segment.departureAt, outbound.segment.arrivalAt) <= 0
-          ) {
-            counts.rejectedReturnBeforeArrival = (counts.rejectedReturnBeforeArrival ?? 0) + 1;
-            continue;
-          }
+          // A way home that leaves before the outbound lands is rejected inside
+          // assembly, which checks every junction rather than only this one.
           record(
             assembleCandidate({
               id: `trip:${outbound.offer.id}+${homeward.offer.id}`,
-              outbound: outbound.segment,
-              inbound: homeward.segment,
+              legs: [outbound.segment, homeward.segment],
               offers: [outbound.offer, homeward.offer],
               gaps,
               request: input.request,

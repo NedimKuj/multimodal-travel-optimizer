@@ -57,8 +57,10 @@ export const FCO = location({ code: "FCO", name: "Rome Fiumicino", timeZone: "Eu
 export const CIA = location({ code: "CIA", name: "Rome Ciampino", timeZone: "Europe/Rome", countryCode: "IT" });
 export const TZL = location({ code: "TZL", name: "Tuzla", timeZone: "Europe/Sarajevo", countryCode: "BA" });
 export const SAW = location({ code: "SAW", name: "Istanbul Sabiha", timeZone: "Europe/Istanbul", countryCode: "TR" });
+export const MXP = location({ code: "MXP", name: "Milan Malpensa", timeZone: "Europe/Rome", countryCode: "IT" });
 export const ROME = location({ code: "ROM", name: "Rome", timeZone: "Europe/Rome", countryCode: "IT", type: "city" });
 export const ISTANBUL = location({ code: "IST", name: "Istanbul", timeZone: "Europe/Istanbul", countryCode: "TR", type: "city" });
+export const MILAN = location({ code: "MIL", name: "Milan", timeZone: "Europe/Rome", countryCode: "IT", type: "city" });
 
 /**
  * Distances used by the fixture geography, in kilometres. Roughly real:
@@ -68,11 +70,25 @@ export const FIXTURE_DISTANCES_KM: Record<string, number> = {
   [`${FCO.id}->${ROME.id}`]: 30,
   [`${CIA.id}->${ROME.id}`]: 15,
   [`${SAW.id}->${ISTANBUL.id}`]: 40,
+  [`${MXP.id}->${MILAN.id}`]: 50,
   [`${SJJ.id}->${TZL.id}`]: 71,
   // Airport to airport, for open-jaw gaps.
   [`${FCO.id}->${CIA.id}`]: 30,
   [`${FCO.id}->${SAW.id}`]: 1400,
   [`${CIA.id}->${SAW.id}`]: 1400,
+  [`${FCO.id}->${MXP.id}`]: 480,
+  [`${CIA.id}->${MXP.id}`]: 480,
+  [`${MXP.id}->${SAW.id}`]: 1700,
+  // City to city, for gaps measured where the traveler actually is.
+  [`${ROME.id}->${MILAN.id}`]: 480,
+  [`${ROME.id}->${ISTANBUL.id}`]: 1400,
+  [`${MILAN.id}->${ISTANBUL.id}`]: 1700,
+  [`${ROME.id}->${MXP.id}`]: 480,
+  [`${MILAN.id}->${FCO.id}`]: 480,
+  [`${MILAN.id}->${CIA.id}`]: 480,
+  [`${ISTANBUL.id}->${FCO.id}`]: 1400,
+  [`${ISTANBUL.id}->${CIA.id}`]: 1400,
+  [`${ROME.id}->${SAW.id}`]: 1400,
 };
 
 export const fixtureGeography: AirportGeography = {
@@ -97,7 +113,7 @@ export const fixtureAirports: AirportRepository = {
     recordCount: 4,
   },
   findByIata: (iata) => {
-    const byCode: Record<string, Location> = { SJJ, FCO, CIA, SAW, TZL };
+    const byCode: Record<string, Location> = { SJJ, FCO, CIA, SAW, TZL, MXP };
     return byCode[iata];
   },
 };
@@ -108,10 +124,12 @@ export const cityRepository: CityRepository = {
     fetchedAt: parseUtcInstant("2026-09-18T08:00:00Z"),
     recordCount: 2,
   },
-  findByCode: (code) => (code === "ROM" ? ROME : code === "IST" ? ISTANBUL : undefined),
+  findByCode: (code) =>
+    code === "ROM" ? ROME : code === "IST" ? ISTANBUL : code === "MIL" ? MILAN : undefined,
   findForAirport: (airport) => {
     if (airport.id === FCO.id || airport.id === CIA.id) return ROME;
     if (airport.id === SAW.id) return ISTANBUL;
+    if (airport.id === MXP.id) return MILAN;
     return undefined;
   },
 };

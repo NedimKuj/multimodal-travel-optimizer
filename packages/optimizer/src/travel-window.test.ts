@@ -28,14 +28,18 @@ function resolved(overrides: Record<string, unknown> = {}): TravelWindow {
   return result.window;
 }
 
-/** A same-day-arrival trip: out and back on the given local dates. */
+/** A same-day-arrival trip with one stay: out and back on the given local dates. */
 function dates(tripStart: string, groundEnd: string) {
   return {
     tripStart: parseLocalDate(tripStart),
-    groundStart: parseLocalDate(tripStart),
-    groundEnd: parseLocalDate(groundEnd),
     tripEnd: parseLocalDate(groundEnd),
+    stays: [{ groundStart: parseLocalDate(tripStart), groundEnd: parseLocalDate(groundEnd) }],
   };
+}
+
+/** A stay, for trips that have more than one. */
+function stay(groundStart: string, groundEnd: string) {
+  return { groundStart: parseLocalDate(groundStart), groundEnd: parseLocalDate(groundEnd) };
 }
 
 describe("resolveTravelWindow — with a nights range", () => {
@@ -98,13 +102,21 @@ describe("evaluateTrip — window mode", () => {
 
   it("accepts a trip inside the window with nights in range", () => {
     // Departs 28 Dec, returns 2 Jan: 5 nights, inside 24 Dec..5 Jan.
-    expect(evaluateTrip(window, dates("2026-12-28", "2027-01-02"))).toEqual({ ok: true, nights: 5 });
+    expect(evaluateTrip(window, dates("2026-12-28", "2027-01-02"))).toEqual({
+      ok: true,
+      nights: 5,
+      nightsByStay: [5],
+    });
   });
 
   it("accepts the case anchored dates would have excluded", () => {
     // Departs 24 Dec for 7 nights, returning 31 Dec — inside the window, but
     // outside an anchored return range of 1..5 Jan.
-    expect(evaluateTrip(window, dates("2026-12-24", "2026-12-31"))).toEqual({ ok: true, nights: 7 });
+    expect(evaluateTrip(window, dates("2026-12-24", "2026-12-31"))).toEqual({
+      ok: true,
+      nights: 7,
+      nightsByStay: [7],
+    });
   });
 
   it("rejects a trip that starts before or ends after the window", () => {
@@ -133,11 +145,10 @@ describe("evaluateTrip — window mode", () => {
     // Overnight outbound: leaves 27 Dec, lands 28 Dec; returns 2 Jan → 5 nights.
     const overnight = {
       tripStart: parseLocalDate("2026-12-27"),
-      groundStart: parseLocalDate("2026-12-28"),
-      groundEnd: parseLocalDate("2027-01-02"),
       tripEnd: parseLocalDate("2027-01-02"),
+      stays: [stay("2026-12-28", "2027-01-02")],
     };
-    expect(evaluateTrip(window, overnight)).toEqual({ ok: true, nights: 5 });
+    expect(evaluateTrip(window, overnight)).toEqual({ ok: true, nights: 5, nightsByStay: [5] });
   });
 });
 
@@ -145,7 +156,11 @@ describe("evaluateTrip — anchored mode", () => {
   const window = resolved({ minNights: undefined, maxNights: undefined });
 
   it("accepts departures and returns inside their own ranges", () => {
-    expect(evaluateTrip(window, dates("2026-12-27", "2027-01-04"))).toEqual({ ok: true, nights: 8 });
+    expect(evaluateTrip(window, dates("2026-12-27", "2027-01-04"))).toEqual({
+      ok: true,
+      nights: 8,
+      nightsByStay: [8],
+    });
   });
 
   it("rejects a return outside the return range even when nights look fine", () => {
@@ -153,5 +168,58 @@ describe("evaluateTrip — anchored mode", () => {
       ok: false,
       reason: "outside_window",
     });
+  });
+
+  it("measures the window against the last place stayed, not the first", () => {
+    // Out 27 Dec, on to a second city 30 Dec, home 4 Jan: the 4 Jan departure
+    // is what the return range has to contain.
+    const multiCity = {
+      tripStart: parseLocalDate("2026-12-27"),
+      tripEnd: parseLocalDate("2027-01-04"),
+      stays: [stay("2026-12-27", "2026-12-30"), stay("2026-12-30", "2027-01-04")],
+    };
+    expect(evaluateTrip(window, multiCity)).toMatchObject({ ok: true });
+  });
+});
+
+describe("evaluateTrip — trips with more than one stay", () => {
+  const window = resolved();
+
+  it("splits nights between the cities and sums them for the range", () => {
+    // 3 nights in the first city, 2 in the second: 5 in all, inside 5..7.
+    const multiCity = {
+      tripStart: parseLocalDate("2026-12-27"),
+      tripEnd: parseLocalDate("2027-01-01"),
+      stays: [stay("2026-12-27", "2026-12-30"), stay("2026-12-30", "2027-01-01")],
+    };
+    expect(evaluateTrip(window, multiCity)).toEqual({
+      ok: true,
+      nights: 5,
+      nightsByStay: [3, 2],
+    });
+  });
+
+  it("does not count a night spent crossing between cities", () => {
+    // The connecting leg leaves on the 30th and lands on the 31st. That night
+    // belongs to neither city, so the trip has 4 nights on the ground, not 5.
+    const overnightLeg = {
+      tripStart: parseLocalDate("2026-12-27"),
+      tripEnd: parseLocalDate("2027-01-01"),
+      stays: [stay("2026-12-27", "2026-12-30"), stay("2026-12-31", "2027-01-01")],
+    };
+    expect(evaluateTrip(window, overnightLeg)).toEqual({
+      ok: false,
+      reason: "nights_out_of_range",
+    });
+  });
+
+  it("applies the requested range to the total, not to each city", () => {
+    // 2 + 4 = 6 nights: in range, though neither city alone reaches 5.
+    const uneven = {
+      tripStart: parseLocalDate("2026-12-27"),
+      tripEnd: parseLocalDate("2027-01-02"),
+      stays: [stay("2026-12-27", "2026-12-29"), stay("2026-12-29", "2027-01-02")],
+    };
+    expect(evaluateTrip(window, uneven)).toEqual({ ok: true, nights: 6, nightsByStay: [2, 4] });
   });
 });
