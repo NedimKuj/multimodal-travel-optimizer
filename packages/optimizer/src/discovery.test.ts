@@ -10,7 +10,7 @@ import {
 } from "@travel-optimizer/domain";
 import { describe, expect, it } from "vitest";
 
-import { discoverOneWayLegs, monthsIn } from "./discovery.js";
+import { discoverOneWayLegs } from "./discovery.js";
 import { resolveTravelWindow } from "./travel-window.js";
 import {
   CIA,
@@ -98,14 +98,6 @@ const window = (() => {
 })();
 
 const origins = [{ airport: SJJ, distanceKm: 0, isPrimary: true }];
-
-describe("monthsIn", () => {
-  it("counts every calendar month a range touches", () => {
-    expect(monthsIn({ from: "2026-12-24", to: "2026-12-31" })).toBe(1);
-    expect(monthsIn({ from: "2026-12-29", to: "2027-01-05" })).toBe(2);
-    expect(monthsIn({ from: "2026-11-01", to: "2027-01-31" })).toBe(3);
-  });
-});
 
 describe("discoverOneWayLegs", () => {
   it("asks one broad outbound question, then a return query per destination", async () => {

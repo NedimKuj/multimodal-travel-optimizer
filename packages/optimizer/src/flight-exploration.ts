@@ -24,6 +24,7 @@ import {
   type TripSummary,
 } from "@travel-optimizer/domain";
 
+import type { SkippedQuery } from "./budget.js";
 import {
   DEFAULT_CONNECTION_RULES,
   requiredConnectionMinutes,
@@ -97,7 +98,8 @@ export interface ExplorationCounts {
 
 export interface DiscoveryRecord {
   readonly enriched: readonly { readonly airport: Location; readonly returnOffersFound: number }[];
-  readonly skipped: readonly { readonly airport: Location; readonly reason: string }[];
+  /** Queries the search chose not to make, in the shared shape (`budget.ts`). */
+  readonly skipped: readonly SkippedQuery[];
   readonly callsPlanned: number;
   readonly callBudget: number;
 }

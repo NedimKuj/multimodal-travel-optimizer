@@ -7,6 +7,8 @@ import {
   type SearchRequest,
 } from "@travel-optimizer/domain";
 
+import type { SkippedQuery } from "./budget.js";
+
 /*
  * Alternative origin expansion (ADR 0013).
  *
@@ -32,12 +34,9 @@ export interface SelectedOrigin {
   readonly isPrimary: boolean;
 }
 
-export type SkipReason = "call_budget" | "cap";
-
-export interface SkippedOrigin {
-  readonly airport: Location;
+/** An origin that was not queried, in the shared shape (`budget.ts`). */
+export interface SkippedOrigin extends SkippedQuery {
   readonly distanceKm: number;
-  readonly reason: SkipReason;
 }
 
 /** Alias used by the search trace, so a reader sees what it records. */
@@ -90,6 +89,7 @@ export function expandOrigins(input: ExpandOriginsInput): OriginExpansion {
 
   const origins: SelectedOrigin[] = [primary];
   const skipped: SkippedOrigin[] = beyondCap.map((entry) => ({
+    stage: "origin",
     airport: entry.airport,
     distanceKm: entry.distanceKm,
     reason: "cap",
@@ -101,7 +101,12 @@ export function expandOrigins(input: ExpandOriginsInput): OriginExpansion {
       origins.push({ airport: entry.airport, distanceKm: entry.distanceKm, isPrimary: false });
       spend += input.callsPerOrigin;
     } else {
-      skipped.push({ airport: entry.airport, distanceKm: entry.distanceKm, reason: "call_budget" });
+      skipped.push({
+        stage: "origin",
+        airport: entry.airport,
+        distanceKm: entry.distanceKm,
+        reason: "call_budget",
+      });
     }
   }
 

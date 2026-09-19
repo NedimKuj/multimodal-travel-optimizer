@@ -212,11 +212,19 @@ export function formatSearch(trace: SearchTrace, options: FormatOptions): string
     const withReturns = trace.discovery.enriched.filter(
       (entry) => entry.returnOffersFound > 0,
     ).length;
+    // A destination stopped by our own shortlist cap was not stopped by the
+    // budget, and saying so would misdescribe what limited the search.
+    const outOfBudget = trace.discovery.skipped.filter(
+      (entry) => entry.reason === "call_budget",
+    ).length;
+    const beyondCap = trace.discovery.skipped.length - outOfBudget;
+    const reasons = [
+      ...(outOfBudget > 0 ? [`${String(outOfBudget)} not checked (call budget)`] : []),
+      ...(beyondCap > 0 ? [`${String(beyondCap)} beyond the shortlist`] : []),
+    ];
     lines.push(
       `Destinations checked for a way home: ${String(trace.discovery.enriched.length)} (${String(withReturns)} had one)` +
-        (trace.discovery.skipped.length > 0
-          ? ` · ${String(trace.discovery.skipped.length)} not checked (call budget)`
-          : ""),
+        (reasons.length > 0 ? ` · ${reasons.join(" · ")}` : ""),
     );
     lines.push(
       `Calls planned: ${String(trace.discovery.callsPlanned)} of ${String(trace.discovery.callBudget)} budget`,

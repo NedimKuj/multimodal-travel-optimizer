@@ -8,6 +8,15 @@ import type {
   TransportSegment,
 } from "@travel-optimizer/domain";
 
+import {
+  canAfford,
+  costOfQuery,
+  createSearchBudget,
+  DEFAULT_CALL_BUDGET,
+  recordSkip,
+  spend,
+  type SkippedQuery,
+} from "./budget.js";
 import type { SelectedOrigin } from "./origin-expansion.js";
 import type { TravelWindow } from "./travel-window.js";
 
@@ -23,10 +32,6 @@ import type { TravelWindow } from "./travel-window.js";
  * which is unverified (docs/provider-compliance.md).
  */
 
-export const DEFAULT_CALL_BUDGET = 12;
-
-export type SkipReason = "call_budget";
-
 export interface EnrichmentRecord {
   readonly airport: Location;
   /** Cheapest outbound fare found for it, in minor units. */
@@ -34,10 +39,9 @@ export interface EnrichmentRecord {
   readonly returnOffersFound: number;
 }
 
-export interface SkippedDestination {
-  readonly airport: Location;
+/** A destination whose return legs were never queried (`budget.ts`). */
+export interface SkippedDestination extends SkippedQuery {
   readonly cheapestOutboundMinor: number;
-  readonly reason: SkipReason;
 }
 
 export interface DiscoveryResult {
@@ -67,22 +71,6 @@ export interface DiscoveryOptions {
   /** Cap on destinations enriched, before the budget is even considered. */
   readonly maxEnrichedDestinations?: number;
   readonly signal?: AbortSignal;
-}
-
-/** One-way calls cost one per calendar month the range touches. */
-export function monthsIn(range: { readonly from: string; readonly to: string }): number {
-  let cursor = range.from.slice(0, 7);
-  const last = range.to.slice(0, 7);
-  let months = 0;
-  while (cursor <= last && months <= 24) {
-    months += 1;
-    const [year = "", month = ""] = cursor.split("-");
-    cursor =
-      Number(month) === 12
-        ? `${String(Number(year) + 1)}-01`
-        : `${year}-${String(Number(month) + 1).padStart(2, "0")}`;
-  }
-  return months;
 }
 
 interface Candidate {
@@ -127,12 +115,16 @@ export async function discoverOneWayLegs(
 ): Promise<DiscoveryResult> {
   const callBudget =
     options.callBudget ?? provider.descriptor.maxCallsPerSearch ?? DEFAULT_CALL_BUDGET;
+  const budget = createSearchBudget(callBudget);
   const failures: ProviderFailure[] = [];
   const metrics: ProviderCallMetrics[] = [];
   const originCodes = options.origins.map((origin) => origin.airport.iata ?? origin.airport.id);
   const [primary] = options.origins;
 
-  const outboundCost = monthsIn(options.window.departure) * originCodes.length;
+  // Stage 1 asks every origin the same broad question, so it costs a call per
+  // departure month per origin.
+  const outboundCost = costOfQuery(options.window.departure) * originCodes.length;
+  spend(budget, outboundCost);
   const outbound = await provider.search(
     {
       origins: originCodes,
@@ -155,7 +147,7 @@ export async function discoverOneWayLegs(
       skipped: [],
       failures,
       metrics,
-      callsPlanned: outboundCost,
+      callsPlanned: budget.usedProviderCalls,
       callBudget,
       status: "failed",
     };
@@ -171,21 +163,28 @@ export async function discoverOneWayLegs(
   const enriched: EnrichmentRecord[] = [];
   const skipped: SkippedDestination[] = [];
 
-  const returnCallCost = monthsIn(options.window.return);
-  let callsPlanned = outboundCost;
+  const returnCallCost = costOfQuery(options.window.return);
   const homeCode = primary.airport.iata ?? primary.airport.id;
 
+  const skip = (candidate: Candidate, reason: SkippedQuery["reason"]): void => {
+    const record = {
+      stage: "return" as const,
+      airport: candidate.airport,
+      cheapestOutboundMinor: candidate.cheapestOutboundMinor,
+      reason,
+    };
+    skipped.push(record);
+    recordSkip(budget, record);
+  };
+
   for (const candidate of shortlist) {
-    if (callsPlanned + returnCallCost > callBudget) {
-      skipped.push({
-        airport: candidate.airport,
-        cheapestOutboundMinor: candidate.cheapestOutboundMinor,
-        reason: "call_budget",
-      });
+    if (!canAfford(budget, returnCallCost)) {
+      skip(candidate, "call_budget");
       continue;
     }
 
     const code = candidate.airport.iata ?? candidate.airport.id;
+    spend(budget, returnCallCost);
     const back = await provider.search(
       {
         origins: [code],
@@ -196,7 +195,6 @@ export async function discoverOneWayLegs(
       },
       options.signal === undefined ? undefined : { signal: options.signal },
     );
-    callsPlanned += returnCallCost;
     metrics.push(back.metrics);
     failures.push(...back.failures);
 
@@ -211,13 +209,10 @@ export async function discoverOneWayLegs(
     enriched.push({ ...candidate, returnOffersFound: back.data.offers.length });
   }
 
-  // Destinations past the enrichment cap were never candidates for a call.
+  // Destinations past the enrichment cap were never candidates for a call: a
+  // limit of ours stopped them, not the budget.
   for (const candidate of ranked.slice(shortlist.length)) {
-    skipped.push({
-      airport: candidate.airport,
-      cheapestOutboundMinor: candidate.cheapestOutboundMinor,
-      reason: "call_budget",
-    });
+    skip(candidate, "cap");
   }
 
   return {
@@ -228,7 +223,7 @@ export async function discoverOneWayLegs(
     skipped,
     failures,
     metrics,
-    callsPlanned,
+    callsPlanned: budget.usedProviderCalls,
     callBudget,
     status: failures.length > 0 ? "partial" : "ok",
   };
