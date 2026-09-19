@@ -132,7 +132,20 @@ export interface TripDates {
   readonly stays: readonly StayDates[];
 }
 
-export type TripRejection = "outside_window" | "nights_out_of_range";
+export type TripRejection = "outside_window" | "nights_out_of_range" | "stay_too_short";
+
+export interface StayRules {
+  /**
+   * Nights required in each place a multi-stop trip stops at.
+   *
+   * A city passed through in an afternoon is a connection, not a destination,
+   * and a "multi-city trip" that never stops in the middle is a one-stop
+   * flight described dishonestly (ADR 0015 §4).
+   */
+  readonly minNightsPerStay: number;
+}
+
+export const DEFAULT_STAY_RULES: StayRules = { minNightsPerStay: 1 };
 
 export type TripEvaluation =
   | {
@@ -152,7 +165,11 @@ function within(date: LocalDate, range: LocalDateRange): boolean {
  * Decides whether a candidate trip satisfies the window, and reports why not
  * so each rejection can be counted.
  */
-export function evaluateTrip(window: TravelWindow, dates: TripDates): TripEvaluation {
+export function evaluateTrip(
+  window: TravelWindow,
+  dates: TripDates,
+  rules: StayRules = DEFAULT_STAY_RULES,
+): TripEvaluation {
   const nightsByStay = dates.stays.map((stay) => daysBetween(stay.groundStart, stay.groundEnd));
   // Nights belong to stays, not to the span from first leg to last: a night
   // spent crossing between two cities is a night in neither (spec §9).
@@ -166,6 +183,13 @@ export function evaluateTrip(window: TravelWindow, dates: TripDates): TripEvalua
       : within(dates.tripStart, window.departure) && within(lastGroundEnd, window.return);
   if (!insideWindow) {
     return { ok: false, reason: "outside_window" };
+  }
+
+  // Every place a multi-stop trip stops at must be worth stopping at. A trip
+  // with a single stay is governed by the requested nights alone, so an
+  // ordinary same-day return remains possible.
+  if (nightsByStay.length > 1 && nightsByStay.some((stay) => stay < rules.minNightsPerStay)) {
+    return { ok: false, reason: "stay_too_short" };
   }
 
   if (window.minNights !== undefined && nights < window.minNights) {

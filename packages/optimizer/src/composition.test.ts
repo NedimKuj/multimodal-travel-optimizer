@@ -214,7 +214,10 @@ describe("open jaw (pattern 2)", () => {
           CIA: [returnLeg("back-cia", CIA, 3000)],
         }),
       ),
-      { ...options, composition: { maxUnpricedGapKm: 100, maxOffersPerAirport: 8 } },
+      {
+        ...options,
+        composition: { maxUnpricedGapKm: 100, maxOffersPerAirport: 8, minNightsPerCity: 1 },
+      },
     );
     expect(result.counts.rejectedGapTooFar).toBeGreaterThan(0);
     const gapped = result.destinations
@@ -479,6 +482,36 @@ describe("multi-city (patterns 3 and 4)", () => {
       .flatMap((destination) => destination.candidates)
       .some((candidate) => candidate.summary.unpricedGaps.length > 0);
     expect(anyGapped).toBe(true);
+  });
+
+  it("refuses a city the trip only passes through", async () => {
+    // The onward leg leaves Rome the same afternoon the outbound lands there,
+    // so Rome gets no night: that is a connection, not a second city.
+    const sameDay = provider(
+      [outboundLeg("out-cia", CIA, 4000), outboundLeg("out-mxp", MXP, 8000)],
+      { CIA: [returnLeg("back-cia", CIA, 3000)], MXP: [returnLeg("back-mxp", MXP, 3500)] },
+      {
+        CIA: [
+          (() => {
+            const leg = segment({
+              id: "cia-mxp-sameday",
+              origin: CIA,
+              destination: MXP,
+              departure: "2026-12-27T17:00+01:00",
+              arrival: "2026-12-27T18:15+01:00",
+            });
+            return { segments: [leg], offers: [offer("cia-mxp-sameday-fare", [leg.id], 2000)] };
+          })(),
+        ],
+      },
+    );
+    const result = await exploreComposedItineraries(
+      request({ allowMultiCity: true }),
+      deps(sameDay),
+      options,
+    );
+    expect(result.counts.rejectedStayTooShort).toBeGreaterThan(0);
+    expect(threeLeg(result)).toEqual([]);
   });
 
   it("counts second cities it reached but cannot get home from", async () => {

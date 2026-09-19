@@ -43,7 +43,12 @@ import {
   type OriginExpansion,
   type OriginExpansionConfig,
 } from "./origin-expansion.js";
-import { evaluateTrip, resolveTravelWindow, type TravelWindow } from "./travel-window.js";
+import {
+  evaluateTrip,
+  resolveTravelWindow,
+  type StayRules,
+  type TravelWindow,
+} from "./travel-window.js";
 
 /*
  * Phase 1 flight exploration.
@@ -91,6 +96,8 @@ export interface ExplorationCounts {
   readonly rejectedGapTooFar: number;
   /** Pairings where the way home leaves before the outbound arrives. */
   readonly rejectedReturnBeforeArrival: number;
+  /** Multi-stop trips that never stopped: a city passed through in hours. */
+  readonly rejectedStayTooShort: number;
   /** Destinations reached but with no retrieved way home. */
   readonly destinationsWithoutReturn: number;
   /** Second cities an onward leg reached (Phase 3b). */
@@ -154,6 +161,7 @@ const emptyCounts: ExplorationCounts = {
   rejectedBudget: 0,
   rejectedGapTooFar: 0,
   rejectedReturnBeforeArrival: 0,
+  rejectedStayTooShort: 0,
   destinationsWithoutReturn: 0,
   secondCitiesReached: 0,
   secondCitiesWithoutReturn: 0,
@@ -515,6 +523,8 @@ export interface AssembleCandidateInput {
    * gaps beyond it are not offered at all rather than offered with a caveat.
    */
   readonly maxUnpricedGapKm?: number;
+  /** Nights required in each place a multi-stop trip stops at (ADR 0015 §4). */
+  readonly stayRules?: StayRules;
 }
 
 /**
@@ -628,11 +638,16 @@ export function assembleCandidate(input: AssembleCandidateInput): AttemptOutcome
       groundStart: localDate(stay.reached.arrivalAt),
       groundEnd: localDate(stay.left.departureAt),
     })),
-  });
+  }, input.stayRules);
   if (!evaluation.ok) {
     return {
       ok: false,
-      counter: evaluation.reason === "outside_window" ? "rejectedOutsideWindow" : "rejectedNights",
+      counter:
+        evaluation.reason === "outside_window"
+          ? "rejectedOutsideWindow"
+          : evaluation.reason === "stay_too_short"
+            ? "rejectedStayTooShort"
+            : "rejectedNights",
     };
   }
 

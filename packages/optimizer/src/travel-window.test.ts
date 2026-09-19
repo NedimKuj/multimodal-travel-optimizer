@@ -223,3 +223,67 @@ describe("evaluateTrip — trips with more than one stay", () => {
     expect(evaluateTrip(window, uneven)).toEqual({ ok: true, nights: 6, nightsByStay: [2, 4] });
   });
 });
+
+describe("evaluateTrip — a night in every city", () => {
+  const window = resolved();
+
+  it("rejects a trip that passes through a city without stopping", () => {
+    // Lands and leaves the same day: a connection, not a second destination.
+    const passingThrough = {
+      tripStart: parseLocalDate("2026-12-27"),
+      tripEnd: parseLocalDate("2027-01-01"),
+      stays: [stay("2026-12-27", "2026-12-27"), stay("2026-12-27", "2027-01-01")],
+    };
+    expect(evaluateTrip(window, passingThrough)).toEqual({
+      ok: false,
+      reason: "stay_too_short",
+    });
+  });
+
+  it("rejects it even when the nights add up to what was asked for", () => {
+    const stoppingOnlyAtTheEnd = {
+      tripStart: parseLocalDate("2026-12-27"),
+      tripEnd: parseLocalDate("2027-01-02"),
+      stays: [stay("2026-12-27", "2026-12-27"), stay("2026-12-27", "2027-01-02")],
+    };
+    // Six nights in all, inside the requested 5..7, and still not a two-city
+    // trip: one of its two cities gets no night at all.
+    expect(evaluateTrip(window, stoppingOnlyAtTheEnd)).toEqual({
+      ok: false,
+      reason: "stay_too_short",
+    });
+  });
+
+  it("leaves a single-stay trip to the requested nights alone", () => {
+    // An ordinary round trip with no nights is a day return, not a trip that
+    // skipped a city, so the per-stay floor does not apply to it.
+    const dayReturn = resolved({
+      minNights: undefined,
+      maxNights: undefined,
+      departureDate: "2026-12-27",
+      returnDate: "2026-12-27",
+      flexibilityDays: 0,
+    });
+    expect(evaluateTrip(dayReturn, dates("2026-12-27", "2026-12-27"))).toEqual({
+      ok: true,
+      nights: 0,
+      nightsByStay: [0],
+    });
+  });
+
+  it("honours a floor of more than one night", () => {
+    const twoNightsEach = {
+      tripStart: parseLocalDate("2026-12-27"),
+      tripEnd: parseLocalDate("2027-01-02"),
+      stays: [stay("2026-12-27", "2026-12-28"), stay("2026-12-28", "2027-01-02")],
+    };
+    expect(evaluateTrip(window, twoNightsEach, { minNightsPerStay: 2 })).toEqual({
+      ok: false,
+      reason: "stay_too_short",
+    });
+    expect(evaluateTrip(window, twoNightsEach, { minNightsPerStay: 1 })).toMatchObject({
+      ok: true,
+      nightsByStay: [1, 5],
+    });
+  });
+});

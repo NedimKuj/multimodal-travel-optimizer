@@ -39,11 +39,17 @@ export interface CompositionConfig {
    * caps the work while keeping the cheapest options (spec §15 pruning).
    */
   readonly maxOffersPerAirport: number;
+  /**
+   * Nights required in each city a multi-stop trip stops at. A city passed
+   * through in an afternoon is a connection, not a destination (ADR 0015 §4).
+   */
+  readonly minNightsPerCity: number;
 }
 
 export const DEFAULT_COMPOSITION_CONFIG: CompositionConfig = {
   maxUnpricedGapKm: 800,
   maxOffersPerAirport: 8,
+  minNightsPerCity: 1,
 };
 
 /** A one-way fare over exactly one segment. */
@@ -155,6 +161,7 @@ export function composeItineraries(input: ComposeInput): CompositionResult {
     rejectedBudget: 0,
     rejectedGapTooFar: 0,
     rejectedReturnBeforeArrival: 0,
+    rejectedStayTooShort: 0,
     secondCitiesReached: 0,
     secondCitiesWithoutReturn: 0,
   };
@@ -199,6 +206,7 @@ export function composeItineraries(input: ComposeInput): CompositionResult {
               window: input.window,
               context: input.context,
               maxUnpricedGapKm: config.maxUnpricedGapKm,
+              stayRules: { minNightsPerStay: config.minNightsPerCity },
             }),
           );
         }
@@ -227,6 +235,7 @@ export function composeItineraries(input: ComposeInput): CompositionResult {
                 window: input.window,
                 context: input.context,
                 maxUnpricedGapKm: config.maxUnpricedGapKm,
+                stayRules: { minNightsPerStay: config.minNightsPerCity },
               }),
             );
           }
