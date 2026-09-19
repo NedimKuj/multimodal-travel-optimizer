@@ -9,6 +9,7 @@ import {
   fixtureAirports,
   fixtureGeography,
   metrics,
+  MXP,
   offer,
   request,
   SAW,
@@ -51,7 +52,11 @@ function returnLeg(id: string, from: typeof FCO, amountMinor: number) {
 
 type Legs = ReturnType<typeof outboundLeg>;
 
-function provider(outbound: Legs[], returns: Record<string, Legs[]>): FlightProvider {
+function provider(
+  outbound: Legs[],
+  returns: Record<string, Legs[]>,
+  onward: Record<string, Legs[]> = {},
+): FlightProvider {
   const pack = (parts: Legs[]) =>
     okResult(
       "fixture-flights",
@@ -67,8 +72,11 @@ function provider(outbound: Legs[], returns: Record<string, Legs[]>): FlightProv
       maxCallsPerSearch: 12,
     },
     search: (query: FlightSearchQuery) => {
-      if (query.destinations === "anywhere") return Promise.resolve(pack(outbound));
       const [from] = query.origins;
+      if (query.destinations === "anywhere") {
+        // From home this is stage 1; from a destination it is stage 3.
+        return Promise.resolve(pack(from === "SJJ" ? outbound : (onward[from ?? ""] ?? [])));
+      }
       return Promise.resolve(pack(returns[from ?? ""] ?? []));
     },
   };
@@ -355,5 +363,136 @@ describe("gaps are declared against the order the traveller travels", () => {
     expect(result.counts.rejectedReturnBeforeArrival).toBeGreaterThan(0);
     expect(result.counts.rejectedInvalid).toBe(0);
     expect(result.issues.map((issue) => issue.code)).not.toContain("INVALID_CANDIDATE");
+  });
+});
+
+describe("multi-city (patterns 3 and 4)", () => {
+  /** Ciampino is close to Rome, Malpensa is not: transfers differ per stay. */
+  function onwardLeg(id: string, from: typeof CIA, to: typeof MXP, amountMinor: number) {
+    const leg = segment({
+      id,
+      origin: from,
+      destination: to,
+      departure: `2026-12-30T10:00${ARRIVAL_OFFSET[from.id] ?? "+01:00"}`,
+      arrival: `2026-12-30T11:15${ARRIVAL_OFFSET[to.id] ?? "+01:00"}`,
+    });
+    return { segments: [leg], offers: [offer(`${id}-fare`, [leg.id], amountMinor)] };
+  }
+
+  // Milan is reachable from home as well as from Rome. That matters: return
+  // legs are only queried for the destinations stage 1 found, so a second city
+  // stage 1 never saw has no retrieved way home (ADR 0015).
+  const viaMilan = provider(
+    [outboundLeg("out-cia", CIA, 4000), outboundLeg("out-mxp", MXP, 8000)],
+    {
+      CIA: [returnLeg("back-cia", CIA, 3000)],
+      MXP: [returnLeg("back-mxp", MXP, 3500)],
+    },
+    { CIA: [onwardLeg("cia-mxp", CIA, MXP, 2000)] },
+  );
+
+  async function search(overrides: Record<string, unknown> = {}) {
+    return exploreComposedItineraries(
+      request({ allowMultiCity: true, ...overrides }),
+      deps(viaMilan),
+      options,
+    );
+  }
+
+  function threeLeg(result: Awaited<ReturnType<typeof search>>) {
+    return result.destinations
+      .flatMap((destination) => destination.candidates)
+      .filter(
+        (candidate) =>
+          candidate.candidate.offers.filter((entry) => entry.provenance.sourceType !== "estimated")
+            .length === 3,
+      );
+  }
+
+  it("builds a fully priced trip through two cities", async () => {
+    const [trip] = threeLeg(await search());
+    expect(trip).toBeDefined();
+    // 40.00 out + 20.00 on + 35.00 home, per traveler, for two.
+    expect(trip?.summary.cost.fares).toEqual({ amountMinor: 19000, currency: "EUR" });
+    expect(trip?.summary.unpricedGaps).toEqual([]);
+    expect(trip?.summary.cost.scope).toBe("transport_and_partial_accommodation");
+  });
+
+  it("splits the nights between the two cities", async () => {
+    const [trip] = threeLeg(await search());
+    // Rome 27–30 Dec, Milan 30 Dec–2 Jan.
+    expect(trip?.nightsByStay).toEqual([3, 3]);
+    expect(trip?.nights).toBe(6);
+  });
+
+  it("names both cities, in the order they are visited", async () => {
+    const result = await search();
+    const multiCity = result.destinations.find((destination) => destination.cities.length > 1);
+    expect(multiCity?.cities.map((city) => city.name)).toEqual(["Rome", "Milan"]);
+    expect(multiCity?.airports.map((airport) => airport.iata)).toEqual(["CIA", "MXP"]);
+  });
+
+  it("builds nothing three-legged unless multi-city was requested", async () => {
+    const result = await exploreComposedItineraries(
+      request({ allowMultiCity: false }),
+      deps(viaMilan),
+      options,
+    );
+    expect(threeLeg(result)).toEqual([]);
+  });
+
+  it("will not fly home from a third city unless an open jaw is allowed", async () => {
+    // Rome, on to Milan, home from Rome: that leaves Milan to Rome unpriced.
+    const result = await search({ allowOpenJaw: false });
+    const gapped = threeLeg(result).filter(
+      (candidate) => candidate.summary.unpricedGaps.length > 0,
+    );
+    expect(gapped).toEqual([]);
+  });
+
+  it("flies home from a third city as an open jaw, with the sector unpriced", async () => {
+    const result = await search({ allowOpenJaw: true });
+    const gapped = threeLeg(result).filter(
+      (candidate) => candidate.summary.unpricedGaps.length > 0,
+    );
+    expect(gapped.length).toBeGreaterThan(0);
+    const [gap] = gapped[0]?.summary.unpricedGaps ?? [];
+    // Malpensa is far from Milan, so the traveler is in the city by then.
+    expect(gap).toMatchObject({ from: { iata: "MIL" }, status: "unpriced" });
+    expect(gapped[0]?.summary.cost.scope).toBe("excludes_unpriced_segment");
+  });
+
+  it("ranks a complete multi-city trip above one with an unpriced sector", async () => {
+    const result = await search({ allowOpenJaw: true });
+    // Within a destination, every fully priced itinerary comes before every
+    // one whose amount leaves a sector out (ADR 0014 §3).
+    for (const destination of result.destinations) {
+      const gapped = destination.candidates.map(
+        (candidate) => candidate.summary.unpricedGaps.length > 0,
+      );
+      const firstGapped = gapped.indexOf(true);
+      if (firstGapped < 0) continue;
+      expect(gapped.slice(firstGapped).every(Boolean)).toBe(true);
+    }
+    // And such an itinerary really is among the results, not quietly dropped.
+    const anyGapped = result.destinations
+      .flatMap((destination) => destination.candidates)
+      .some((candidate) => candidate.summary.unpricedGaps.length > 0);
+    expect(anyGapped).toBe(true);
+  });
+
+  it("counts second cities it reached but cannot get home from", async () => {
+    const stranded = provider(
+      [outboundLeg("out-cia", CIA, 4000)],
+      { CIA: [returnLeg("back-cia", CIA, 3000)] },
+      { CIA: [onwardLeg("cia-mxp", CIA, MXP, 2000)] },
+    );
+    const result = await exploreComposedItineraries(
+      request({ allowMultiCity: true }),
+      deps(stranded),
+      options,
+    );
+    expect(result.counts.secondCitiesReached).toBe(1);
+    expect(result.counts.secondCitiesWithoutReturn).toBe(1);
   });
 });

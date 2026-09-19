@@ -14,13 +14,17 @@ import {
 import type { TravelWindow } from "./travel-window.js";
 
 /*
- * Composing itineraries from one-way fares (Phase 3, patterns 1 and 2).
+ * Composing itineraries from one-way fares.
  *
- *   round trip : SJJ -> A  +  A -> SJJ
- *   open jaw   : SJJ -> A  +  B -> SJJ, with A -> B left to the traveler
+ *   round trip : SJJ -> A  +  A -> SJJ                      (pattern 1)
+ *   open jaw   : SJJ -> A  +  B -> SJJ                      (pattern 2)
+ *   multi-city : SJJ -> A  +  A -> B  +  B -> SJJ           (pattern 3)
+ *                SJJ -> A  +  A -> B  +  C -> SJJ           (pattern 4)
  *
- * The A -> B sector is an unpriced gap, never an estimate and never omitted
- * silently (ADR 0014). Multi-city is Phase 3b.
+ * Patterns 2 and 4 leave one sector to the traveler. It is an unpriced gap,
+ * never an estimate and never omitted silently (ADR 0014). Where the gap runs
+ * from and to is decided during assembly, where the transfers that determine
+ * its endpoints are known (ADR 0015).
  */
 
 export interface CompositionConfig {
@@ -126,6 +130,20 @@ export function composeItineraries(input: ComposeInput): CompositionResult {
     if (homeward.length > 0) returnByAirport.set(airportId, rankLegs(homeward, config.maxOffersPerAirport));
   }
 
+  // Onward legs exist only for the few destinations the budget reached, which
+  // is what keeps three-leg pairing bounded without a cap of its own.
+  const onwardByAirport = new Map<string, OneWayLeg[]>();
+  if (input.request.allowMultiCity) {
+    for (const [airportId, legs] of discovery.onwardByAirport) {
+      const forward = oneWayLegs(legs.segments, legs.offers).filter(
+        (leg) => leg.segment.origin.id === airportId,
+      );
+      if (forward.length > 0) {
+        onwardByAirport.set(airportId, rankLegs(forward, config.maxOffersPerAirport));
+      }
+    }
+  }
+
   const attempts: CandidateAttempt[] = [];
   const issues: { code: string; message: string }[] = [];
   // Typed against the counter names, so a typo cannot quietly vanish.
@@ -137,6 +155,8 @@ export function composeItineraries(input: ComposeInput): CompositionResult {
     rejectedBudget: 0,
     rejectedGapTooFar: 0,
     rejectedReturnBeforeArrival: 0,
+    secondCitiesReached: 0,
+    secondCitiesWithoutReturn: 0,
   };
 
   const record = (outcome: ReturnType<typeof assembleCandidate>): void => {
@@ -183,8 +203,52 @@ export function composeItineraries(input: ComposeInput): CompositionResult {
           );
         }
       }
+
+      // Patterns 3 and 4: on from A to a second city before heading home.
+      for (const onward of onwardByAirport.get(arrivalId) ?? []) {
+        const secondId = onward.segment.destination.id;
+        // Flying on to where the trip already is makes no second city.
+        if (secondId === arrivalId) continue;
+
+        for (const departureId of departureAirports) {
+          const returns = returnByAirport.get(departureId) ?? [];
+          if (returns.length === 0) continue;
+          // Leaving from anywhere but the second city is an open jaw with a
+          // priced leg before it, so it needs the same permission.
+          if (departureId !== secondId && !input.request.allowOpenJaw) continue;
+
+          for (const homeward of returns) {
+            record(
+              assembleCandidate({
+                id: `trip:${outbound.offer.id}+${onward.offer.id}+${homeward.offer.id}`,
+                legs: [outbound.segment, onward.segment, homeward.segment],
+                offers: [outbound.offer, onward.offer, homeward.offer],
+                request: input.request,
+                window: input.window,
+                context: input.context,
+                maxUnpricedGapKm: config.maxUnpricedGapKm,
+              }),
+            );
+          }
+        }
+      }
     }
   }
+
+  // Return legs are queried for the destinations stage 1 found, so a second
+  // city reached by an onward leg may have no retrieved way home at all. That
+  // is a real limit of the data, and it explains a thin multi-city result.
+  const secondCities = new Set<string>();
+  const strandedSecondCities = new Set<string>();
+  for (const legs of onwardByAirport.values()) {
+    for (const leg of legs) {
+      const secondId = leg.segment.destination.id;
+      secondCities.add(secondId);
+      if (!returnByAirport.has(secondId)) strandedSecondCities.add(secondId);
+    }
+  }
+  counts.secondCitiesReached = secondCities.size;
+  counts.secondCitiesWithoutReturn = strandedSecondCities.size;
 
   return { attempts, counts, issues };
 }

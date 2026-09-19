@@ -1,6 +1,7 @@
 import {
   failedResult,
   okResult,
+  parseLocalDate,
   type FlightProvider,
   type FlightSearchQuery,
   type ProviderResult,
@@ -416,7 +417,10 @@ describe("discoverOneWayLegs — splitting the budget between stages", () => {
     // anything else; two guaranteed ways home at 2 each make 10, and a third
     // return takes it to 12. Onward discovery never gets a call.
     const discovery = await discoverOneWayLegs(stagedProvider(four, {}, queries), {
-      window: { ...window, departure: { from: "2026-12-24", to: "2027-01-01" } },
+      window: {
+        ...window,
+        departure: { from: parseLocalDate("2026-12-24"), to: parseLocalDate("2027-01-01") },
+      },
       currency: "EUR",
       travelers: 2,
       origins: [

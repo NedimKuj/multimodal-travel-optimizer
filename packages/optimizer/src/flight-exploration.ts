@@ -93,6 +93,10 @@ export interface ExplorationCounts {
   readonly rejectedReturnBeforeArrival: number;
   /** Destinations reached but with no retrieved way home. */
   readonly destinationsWithoutReturn: number;
+  /** Second cities an onward leg reached (Phase 3b). */
+  readonly secondCitiesReached: number;
+  /** Second cities reached, but with no retrieved way home from them. */
+  readonly secondCitiesWithoutReturn: number;
   readonly destinations: number;
 }
 
@@ -151,6 +155,8 @@ const emptyCounts: ExplorationCounts = {
   rejectedGapTooFar: 0,
   rejectedReturnBeforeArrival: 0,
   destinationsWithoutReturn: 0,
+  secondCitiesReached: 0,
+  secondCitiesWithoutReturn: 0,
   destinations: 0,
 };
 
