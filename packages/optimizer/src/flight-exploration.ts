@@ -109,6 +109,8 @@ export interface ExplorationCounts {
 
 export interface DiscoveryRecord {
   readonly enriched: readonly { readonly airport: Location; readonly returnOffersFound: number }[];
+  /** Destinations asked where they could go on to, and what came back. */
+  readonly onward: readonly { readonly airport: Location; readonly onwardOffersFound: number }[];
   /** Queries the search chose not to make, in the shared shape (`budget.ts`). */
   readonly skipped: readonly SkippedQuery[];
   readonly callsPlanned: number;

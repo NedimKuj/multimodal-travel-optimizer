@@ -1,4 +1,5 @@
 import {
+  lookupCityForAirport,
   type SearchRequest,
   type TransportOffer,
   type TransportSegment,
@@ -247,17 +248,23 @@ export function composeItineraries(input: ComposeInput): CompositionResult {
   // Return legs are queried for the destinations stage 1 found, so a second
   // city reached by an onward leg may have no retrieved way home at all. That
   // is a real limit of the data, and it explains a thin multi-city result.
-  const secondCities = new Set<string>();
-  const strandedSecondCities = new Set<string>();
+  //
+  // Counted as cities, not airports (ADR 0010): two airports serving one city
+  // are one place to go, and a city is reachable home if any of its airports
+  // is. An airport whose city does not resolve counts as itself rather than
+  // being folded into a city we cannot name.
+  const secondCities = new Map<string, boolean>();
   for (const legs of onwardByAirport.values()) {
     for (const leg of legs) {
-      const secondId = leg.segment.destination.id;
-      secondCities.add(secondId);
-      if (!returnByAirport.has(secondId)) strandedSecondCities.add(secondId);
+      const airport = leg.segment.destination;
+      const lookup = lookupCityForAirport(input.context.cities, airport);
+      const key = lookup.ok ? lookup.city.id : airport.id;
+      const hasWayHome = (secondCities.get(key) ?? false) || returnByAirport.has(airport.id);
+      secondCities.set(key, hasWayHome);
     }
   }
   counts.secondCitiesReached = secondCities.size;
-  counts.secondCitiesWithoutReturn = strandedSecondCities.size;
+  counts.secondCitiesWithoutReturn = [...secondCities.values()].filter((home) => !home).length;
 
   return { attempts, counts, issues };
 }

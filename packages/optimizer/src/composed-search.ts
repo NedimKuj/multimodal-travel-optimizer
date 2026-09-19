@@ -117,6 +117,10 @@ export async function exploreComposedItineraries(
       airport: entry.airport,
       returnOffersFound: entry.returnOffersFound,
     })),
+    onward: discovery.onward.map((entry) => ({
+      airport: entry.airport,
+      onwardOffersFound: entry.onwardOffersFound,
+    })),
     skipped: discovery.skipped.map((entry) => ({
       stage: entry.stage,
       airport: entry.airport,

@@ -207,11 +207,19 @@ Measured 2026-09-19 for `SJJ`:
 | 26 Dec – 3 Jan, 5–7 nights, two-month window | 8 | **0** |
 | 5–20 Dec, 5–7 nights, one-month window | 34 | **0** |
 
-Onward legs are found readily. What is missing is a way home *from* them: return
-legs are only queried for the destinations stage 1 found, and the budget funds
-three to six of those. The second cities an onward leg reaches are almost never
-among them, so a third leg home cannot be retrieved and no three-leg itinerary
-can be built.
+Onward legs are found readily — 77 offers from Rome, 490 across five
+destinations in the December run. What is missing is a way home *from* them.
+
+Return legs are only queried for the destinations **stage 1** found, and the
+second cities an onward leg reaches are a different set. Measured from Rome over
+26 Dec – 5 Jan: 72 onward destinations, of which exactly **one** (Ankara) was
+also a stage-1 destination, and it was not among the eight cheapest that
+composition keeps. In the December run stage 1 found six destinations and got a
+return query for every one of them — the budget was not the constraint there at
+all — while the onward legs reached 34 cities, none of them those six.
+
+So a third leg home cannot be retrieved, and no three-leg itinerary can be
+built, however much budget is left.
 
 The search says so rather than returning nothing without explanation:
 
@@ -219,7 +227,12 @@ The search says so rather than returning nothing without explanation:
 Second cities reachable onward: 34 (34 with no retrieved way home)
 ```
 
-Closing this needs an allocation change — feeding second cities back into the
-return queue so a query can be spent on one — which is a decision about the
-funnel, not a defect in composition. Until then `--multi-city` costs budget that
-would otherwise find more ways home, so it is off by default.
+Closing this needs second cities to enter the return queue in their own right,
+which is a decision about the funnel rather than a defect in composition.
+Appending them after the stage-1 destinations would not be enough: those are
+still queued ahead. It needs a ranking that mixes the two — a second city's cost
+to reach is its outbound fare *plus* its onward fare, not an outbound fare — and
+that ordering is what decides whether the feature ever fires.
+
+Until then `--multi-city` spends budget that would otherwise find more ways
+home, so it is off by default.
