@@ -2111,11 +2111,69 @@ it.
 
 ---
 
+## Phase 3b — Multi-city
+
+Implement, from independently priced one-way fares:
+
+```text
+SJJ → A → B → SJJ      multi-city, every leg priced        (pattern 3)
+SJJ → A → B
+C → SJJ                multi-city open jaw, B → C unpriced (pattern 4)
+```
+
+### Three-stage funnel
+
+```text
+Stage 1   one discovery call per departure month (SJJ → anywhere, one-way)
+Stage 2   return-leg queries    (B → SJJ)
+Stage 3   onward-leg queries    (A → anywhere), only with --multi-city
+```
+
+Stages 2 and 3 share what stage 1 leaves: the first **2 return-leg query units**
+are guaranteed, then the allocator alternates `return → onward → return →
+onward` until the budget is gone (`docs/optimizer-spec.md` §15). The guarantee
+binds onward discovery, not the global budget. `providerCalls <= 12` remains an
+invariant for the whole search, alternative origins included.
+
+Onward discovery is gated behind `--multi-city`. Ungated it would skip cities on
+every search, and a search that skips anything reports `partial`, so the default
+path's status would become permanently degraded for no gain.
+
+### Per-stay transfers
+
+Phase 3 builds access transfers from the arrival airport alone. For an open jaw
+that is wrong: the return-side transfer runs `A's city → A's airport` while
+being anchored to a departure from **B**. Phase 3b attaches transfers **per
+stay**, so an open jaw reads `A airport → A city`, the unpriced gap `A city → B
+city`, then `B city → B airport`.
+
+This also moves gap derivation inside candidate assembly, since the gap's
+endpoints depend on which transfers exist
+(`docs/decisions/0015-multi-city-composition.md`).
+
+### Nights
+
+Every intermediate city requires at least one night. Nights are counted per
+stay, the total still satisfies `[minNights, maxNights]`, and `stays` stays
+empty — a night we cannot price is not accommodation.
+
+Phase 3b is done when three-leg itineraries are deterministic, budget-bounded,
+connection-valid, correctly costed per stay, and a gapped multi-city ranks below
+a complete one.
+
+---
+
 ## Phase 4 — Accommodation
 
 Add hotel provider.
 
 Generate complete trip cost.
+
+**Blocked on credentials.** Hotellook closed in late 2025 and Travelpayouts
+offers no hotel API to partners today (probed 2026-09-18: `lookup.json`,
+`cache.json` and `/v2/prices/hotels` all 404 or 403). This phase needs an
+account with a different accommodation provider before any of it can be built;
+nothing here may be simulated in the meantime.
 
 ---
 

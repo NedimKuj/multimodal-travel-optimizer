@@ -450,6 +450,41 @@ Multi-city candidates are valid when:
 - the complete trip satisfies user constraints
 - total cost is within budget when a budget exists
 
+### Patterns
+
+```text
+pattern 3   SJJ → A + A → B + B → SJJ      every leg priced
+pattern 4   SJJ → A + A → B + C → SJJ      B → C is an unpriced gap (§10)
+```
+
+Pattern 4 is an open jaw with a priced leg before it, and it obeys the same
+rules: the gap is excluded from the amount, labelled, and ranked in its own
+class below fully priced itineraries.
+
+### Nights per city
+
+Every intermediate city requires **at least one night** (configurable). A city
+passed through in an afternoon is a connection, governed by §12, not a
+destination.
+
+Nights are counted per stay. The total must satisfy the requested
+`[minNights, maxNights]`, and each individual stay must satisfy the per-city
+minimum. The nights of a stay are a **derived metric only**: they do not
+populate `stays`, because an unpriced night is not accommodation and must never
+move accommodation coverage off zero (§20, §21).
+
+### Gaps are derived during assembly
+
+Whether a gap runs airport-to-airport, city-to-city or asymmetrically between
+the two depends on which airports are far enough from their cities to need a
+transfer (§13). That is decided while the itinerary is assembled, so the gap's
+endpoints, its distance, and the plausibility ceiling applied to it are all
+derived at the same point — and the distance tested is the distance reported.
+
+An asymmetric gap is correct where the geography is asymmetric: an arrival
+airport far from its city and a departure airport inside one yields
+`A city → B airport`.
+
 ---
 
 ## 12. Connection Validation
@@ -589,6 +624,7 @@ staged funnel:
 Stage 1  one broad discovery call per departure month (origin -> anywhere)
 Stage 2  return-leg queries for destinations chosen deterministically
          (cheapest outbound fare, then IATA), while budget remains
+Stage 3  onward-leg queries (A -> anywhere) for multi-city, when requested
 ```
 
 Destinations that are never queried are recorded as **skipped, with the
@@ -599,8 +635,36 @@ never decide which destinations receive the remaining calls.
 
 The number of provider calls per search is capped by an **application-level
 budget** (currently 12). Every optional dimension — alternative origins,
-return-leg enrichment — draws on the same budget, and a query that cannot fit
-is refused or recorded as skipped rather than silently truncated.
+return-leg enrichment, onward-leg discovery — draws on the same budget, and a
+query that cannot fit is refused or recorded as skipped rather than silently
+truncated.
+
+A **logical query** is one question asked of the provider. It costs as many
+provider calls as its date range spans calendar months, because this provider
+is queried at month granularity (§27). A two-month window therefore makes a
+single logical return-leg query cost two calls.
+
+### Allocating the budget between stages
+
+Stages 2 and 3 compete for what stage 1 leaves. The allocation is:
+
+```text
+1. guarantee the first 2 return-leg query units, or fewer if fewer
+   destinations exist
+2. then alternate: return, onward, return, onward, ... until exhausted
+```
+
+Return legs come first because an itinerary without a way home does not exist,
+while an itinerary without an onward leg is merely a shorter one. Alternating
+afterwards adapts to how many candidates each stage actually has, which a fixed
+proportion would not.
+
+The guarantee is hard against **onward discovery**, never against the global
+budget: if stage 1 and the guaranteed returns already consume the budget, the
+search proceeds with what it has. Exceeding the global budget is never
+permitted, and exhausting it never fails a search — the results already found
+are returned, and every query that did not run is recorded with its stage and
+reason.
 
 This limit is ours, chosen for safety. It is **not** a statement about the
 provider's own rate limits, which remain unverified
