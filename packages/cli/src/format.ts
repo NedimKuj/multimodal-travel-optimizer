@@ -234,12 +234,13 @@ export function formatSearch(trace: SearchTrace, options: FormatOptions): string
     const withReturns = trace.discovery.enriched.filter(
       (entry) => entry.returnOffersFound > 0,
     ).length;
+    // This line is about ways home, so it counts only the queries that would
+    // have found one. Onward queries are reported on their own line below.
+    const returnSkips = trace.discovery.skipped.filter((entry) => entry.stage === "return");
     // A destination stopped by our own shortlist cap was not stopped by the
     // budget, and saying so would misdescribe what limited the search.
-    const outOfBudget = trace.discovery.skipped.filter(
-      (entry) => entry.reason === "call_budget",
-    ).length;
-    const beyondCap = trace.discovery.skipped.length - outOfBudget;
+    const outOfBudget = returnSkips.filter((entry) => entry.reason === "call_budget").length;
+    const beyondCap = returnSkips.length - outOfBudget;
     const reasons = [
       ...(outOfBudget > 0 ? [`${String(outOfBudget)} not checked (call budget)`] : []),
       ...(beyondCap > 0 ? [`${String(beyondCap)} beyond the shortlist`] : []),

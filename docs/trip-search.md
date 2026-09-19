@@ -3,11 +3,11 @@
 Runs a real search from the command line, so the optimizer can be exercised
 without a UI (`docs/implementation-plan.md` §51).
 
-It searches **flights**, plus the ground transfers needed to reach them, and
-with `--open-jaw` composes itineraries that fly home from another city. No
-accommodation, no trains or buses, no multi-city (that is Phase 3b). Fares are
-**cached** and not guaranteed bookable; transfer costs are **estimates from a
-distance model**, never quotes.
+It searches **flights**, plus the ground transfers needed to reach them. With
+`--open-jaw` it composes itineraries that fly home from another city, and with
+`--multi-city` itineraries that stop in a second city on the way. No
+accommodation, no trains or buses. Fares are **cached** and not guaranteed
+bookable; transfer costs are **estimates from a distance model**, never quotes.
 
 ## Prerequisites
 
@@ -60,6 +60,24 @@ A **known cost** is not a total. Itineraries with a gap are ranked in their own
 class, always below fully priced ones, so a trip never looks cheap because of
 the sector it leaves out (ADR 0014).
 
+`--multi-city` allows a second city on the way, and implies `--compose`:
+
+```text
+2. Rome → Milan (multi-city) — CIA, MXP
+   127.00 EUR / person · 254.00 EUR total · transport only
+   3 nights Rome · 3 nights Milan · 7h 46m travelling · direct on every leg
+   fly      2026-12-27 10:00 SJJ → 2026-12-27 11:30 CIA · direct
+   fly      2026-12-30 10:00 CIA → 2026-12-30 11:15 MXP · direct
+   fly      2027-01-02 18:00 MXP → 2027-01-02 19:45 SJJ · direct
+```
+
+Nights are reported **per city**, and every city gets at least one: a place the
+trip passes through in an afternoon is a connection, not a destination, and such
+itineraries are rejected and counted.
+
+Combining `--multi-city` with `--open-jaw` also allows flying home from a third
+city, with that last sector unpriced exactly as above.
+
 `--alternative-airports` also searches nearby origin airports (off by default).
 Each one costs provider calls against the search budget, so the CLI prints which
 alternatives it used and which it skipped, and why. A trip leaving from an
@@ -76,7 +94,7 @@ Candidates: 5 across 3 destination(s)
 1. Istanbul (TR) — SAW
    127.02 EUR / person · 254.04 EUR total · transport only
    Fare: cached · includes estimated access transfer (36.04 EUR)
-   3 nights in Istanbul · 5h 37m travelling · direct both ways
+   3 nights · 5h 37m travelling · direct both ways
    fly      2027-01-01 16:10 SJJ → 2027-01-01 20:00 SAW · 1h 50m · direct · PC 294
    transfer 2027-01-01 20:45 SAW → 2027-01-01 21:41 IST · 56m · estimated
    transfer 2027-01-04 12:24 IST → 2027-01-04 13:20 SAW · 56m · estimated
@@ -96,6 +114,12 @@ Candidates: 5 across 3 destination(s)
   expiry, not that the price lasts forever (ADR 0006).
 - **"transport only"** means flights and their transfers, but no
   accommodation, so it is not yet a complete-trip cost.
+- **Nights are per city** on a multi-city trip, and a night spent crossing
+  between two cities belongs to neither, so the per-city nights can sum to less
+  than the days away.
+- **Transfers attach per stay.** The itinerary carries the traveler in from the
+  airport they land at and back out to the airport they leave from, which on an
+  open jaw are different airports in different cities.
 - The **filtered-out counts** explain a thin result. Nothing is dropped
   silently.
 - `--json` prints the whole search trace: `searchId`, request fingerprint,
@@ -111,17 +135,39 @@ funnel inside a hard budget of **12 provider calls**:
 
 ```text
 Stage 1   one call per departure month: origin → anywhere, one-way
-Stage 2   a return-leg query per destination, cheapest outbound fare first,
-          while budget remains
+Stage 2   a return-leg query per destination, cheapest outbound fare first
+Stage 3   an onward-leg query per destination, with --multi-city only
 ```
 
-The output says how many destinations were checked for a way home, how many
-had one, and how many were never checked because the budget ran out. Return
-legs are genuinely sparse — many destinations have no retrieved way back — so
-that line is usually the explanation for a short result.
+A **logical query** — one question, such as "how do I get home from Rome?" —
+costs one provider call per calendar month its dates span. A two-month window
+therefore makes each return-leg query cost two calls.
+
+Stages 2 and 3 share what stage 1 leaves. The first **two** return-leg queries
+are guaranteed, because an itinerary with no way home does not exist, and then
+the two stages alternate: return, onward, return, onward, until the budget is
+gone. The output names which stage ran short:
+
+```text
+Calls planned: 12 of 12 budget · budget-limited: 3 onward leg queries not made
+```
+
+The output also says how many destinations were checked for a way home, how many
+had one, and how many were never checked. Return legs are genuinely sparse —
+many destinations have no retrieved way back — so that line is usually the
+explanation for a short result.
+
+Return legs are only queried for the destinations stage 1 found, so a **second
+city** reached by an onward leg may have no retrieved way home at all. The
+output reports that too:
+
+```text
+Second cities reachable onward: 4 (3 with no retrieved way home)
+```
 
 Alternative origins draw on the **same** budget: three origins over a two-month
-window spend 6 calls before any return leg is queried.
+window spend 6 calls before any return leg is queried, which leaves room for the
+two guaranteed ways home and nothing else.
 
 The 12 is an application-level safety limit of our own, not the provider's
 quota, which remains unverified (`docs/provider-compliance.md`).
@@ -151,3 +197,29 @@ refresh are the levers.
 This is a property of the current discovery source, not of the destination
 universe (ADR 0008). One-way composition and further providers widen it in
 later phases.
+
+### Multi-city rarely composes today
+
+Measured 2026-09-19 for `SJJ`:
+
+| Request | Second cities reached | With a retrieved way home |
+|---|---|---|
+| 26 Dec – 3 Jan, 5–7 nights, two-month window | 8 | **0** |
+| 5–20 Dec, 5–7 nights, one-month window | 34 | **0** |
+
+Onward legs are found readily. What is missing is a way home *from* them: return
+legs are only queried for the destinations stage 1 found, and the budget funds
+three to six of those. The second cities an onward leg reaches are almost never
+among them, so a third leg home cannot be retrieved and no three-leg itinerary
+can be built.
+
+The search says so rather than returning nothing without explanation:
+
+```text
+Second cities reachable onward: 34 (34 with no retrieved way home)
+```
+
+Closing this needs an allocation change — feeding second cities back into the
+return queue so a query can be spent on one — which is a decision about the
+funnel, not a defect in composition. Until then `--multi-city` costs budget that
+would otherwise find more ways home, so it is off by default.
