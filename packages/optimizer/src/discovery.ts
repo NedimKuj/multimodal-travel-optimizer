@@ -13,6 +13,7 @@ import {
   costOfQuery,
   createSearchBudget,
   DEFAULT_CALL_BUDGET,
+  GUARANTEED_RETURN_QUERIES,
   recordSkip,
   spend,
   type SkippedQuery,
@@ -89,6 +90,8 @@ export interface DiscoveryOptions {
    * and a search that skips queries reports itself as partial.
    */
   readonly multiCity?: boolean;
+  /** Overrides the guaranteed return-leg floor; for tests and tuning. */
+  readonly guaranteedReturnQueries?: number;
   readonly signal?: AbortSignal;
 }
 
@@ -125,8 +128,8 @@ function rankDestinations(
 }
 
 /**
- * Runs the funnel: one outbound discovery call, then return-leg queries for as
- * many destinations as the remaining budget allows.
+ * Runs the funnel: one outbound discovery call, then ways home and onward legs
+ * for as many destinations as the remaining budget allows.
  */
 export async function discoverOneWayLegs(
   provider: FlightProvider,
@@ -266,7 +269,21 @@ export async function discoverOneWayLegs(
     onward.push({ airport: candidate.airport, onwardOffersFound: on.data.offers.length });
   };
 
-  for (const candidate of shortlist) {
+  // Stages 2 and 3 share what stage 1 left (ADR 0015). Ways home are
+  // guaranteed a floor, then the two stages alternate, which adapts to how many
+  // candidates each actually has in a way a fixed proportion would not.
+  const returnQueue = [...shortlist];
+  const onwardQueue = options.multiCity === true ? [...shortlist] : [];
+
+  let guaranteed = Math.min(
+    options.guaranteedReturnQueries ?? GUARANTEED_RETURN_QUERIES,
+    returnQueue.length,
+  );
+  while (guaranteed > 0) {
+    const candidate = returnQueue.shift();
+    if (candidate === undefined) break;
+    guaranteed -= 1;
+    // The floor is hard against onward discovery, never against the budget.
     if (!canAfford(budget, returnCallCost)) {
       skip(candidate, "return", "call_budget");
       continue;
@@ -274,17 +291,31 @@ export async function discoverOneWayLegs(
     await queryReturn(candidate);
   }
 
-  // Stage 3 spends whatever stage 2 left, and only when multi-city was asked
-  // for. The allocation between the two stages is Phase 3b's next step.
-  if (options.multiCity === true) {
-    for (const candidate of shortlist) {
-      if (!canAfford(budget, onwardCallCost)) {
-        skip(candidate, "onward", "call_budget");
-        continue;
-      }
-      await queryOnward(candidate);
+  // After the floor: return, onward, return, onward, while anything fits.
+  type Stage = "return" | "onward";
+  let next: Stage = "return";
+  for (;;) {
+    const order: readonly Stage[] =
+      next === "return" ? ["return", "onward"] : ["onward", "return"];
+    let ran = false;
+    for (const stage of order) {
+      const queue = stage === "return" ? returnQueue : onwardQueue;
+      const cost = stage === "return" ? returnCallCost : onwardCallCost;
+      const head = queue[0];
+      if (head === undefined || !canAfford(budget, cost)) continue;
+      queue.shift();
+      if (stage === "return") await queryReturn(head);
+      else await queryOnward(head);
+      next = stage === "return" ? "onward" : "return";
+      ran = true;
+      break;
     }
+    if (!ran) break;
   }
+
+  // Whatever neither stage could reach is recorded, never dropped quietly.
+  for (const candidate of returnQueue) skip(candidate, "return", "call_budget");
+  for (const candidate of onwardQueue) skip(candidate, "onward", "call_budget");
 
   // Destinations past the enrichment cap were never candidates for a call: a
   // limit of ours stopped them, not the budget.

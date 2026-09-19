@@ -16,6 +16,16 @@ import type { Location } from "@travel-optimizer/domain";
 
 export const DEFAULT_CALL_BUDGET = 12;
 
+/**
+ * Return-leg queries guaranteed before any budget reaches onward discovery.
+ *
+ * An itinerary with no way home does not exist, while one with no onward leg is
+ * simply a shorter trip, so ways home earn a floor. The guarantee binds onward
+ * discovery, never the global budget: where even this does not fit, the search
+ * runs with fewer returns rather than overspending (ADR 0015).
+ */
+export const GUARANTEED_RETURN_QUERIES = 2;
+
 /** The stages of the funnel, in the order a search runs them. */
 export type SearchStageName = "origin" | "outbound" | "return" | "onward";
 

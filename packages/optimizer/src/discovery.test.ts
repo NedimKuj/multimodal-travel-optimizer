@@ -355,3 +355,125 @@ describe("discoverOneWayLegs — onward legs (stage 3)", () => {
     expect(onwardSkips.every((entry) => entry.reason === "call_budget")).toBe(true);
   });
 });
+
+describe("discoverOneWayLegs — splitting the budget between stages", () => {
+  /** Four destinations, so both queues have more than the budget can fund. */
+  const four = result([
+    oneWay("to-cia", CIA, 2000),
+    oneWay("to-fco", FCO, 2600),
+    oneWay("to-mxp", MXP, 3000),
+    oneWay("to-saw", SAW, 9000),
+  ]);
+
+  /** The stage each query belongs to, in the order they were asked. */
+  function stagesOf(queries: readonly FlightSearchQuery[]): string[] {
+    return queries.slice(1).map((query) => (query.destinations === "anywhere" ? "onward" : "return"));
+  }
+
+  it("funds the guaranteed ways home before any onward leg", async () => {
+    const queries: FlightSearchQuery[] = [];
+    await discoverOneWayLegs(stagedProvider(four, {}, queries), {
+      window,
+      currency: "EUR",
+      travelers: 2,
+      origins,
+      callBudget: 12,
+      multiCity: true,
+    });
+    expect(stagesOf(queries).slice(0, 2)).toEqual(["return", "return"]);
+  });
+
+  it("alternates once the floor is covered", async () => {
+    const queries: FlightSearchQuery[] = [];
+    await discoverOneWayLegs(stagedProvider(four, {}, queries), {
+      window,
+      currency: "EUR",
+      travelers: 2,
+      origins,
+      callBudget: 12,
+      multiCity: true,
+    });
+    // Stage 1 costs 1; each query after it costs 2, so 12 funds five in all:
+    // two guaranteed ways home, then return, onward, return.
+    expect(stagesOf(queries)).toEqual(["return", "return", "return", "onward", "return"]);
+  });
+
+  it("asks nothing onward when multi-city was not requested", async () => {
+    const queries: FlightSearchQuery[] = [];
+    await discoverOneWayLegs(stagedProvider(four, {}, queries), {
+      window,
+      currency: "EUR",
+      travelers: 2,
+      origins,
+      callBudget: 12,
+    });
+    expect(stagesOf(queries).every((stage) => stage === "return")).toBe(true);
+  });
+
+  it("spends the floor on ways home even when that leaves nothing onward", async () => {
+    const queries: FlightSearchQuery[] = [];
+    // Three origins over a two-month departure window cost 6 of 12 before
+    // anything else; two guaranteed ways home at 2 each make 10, and a third
+    // return takes it to 12. Onward discovery never gets a call.
+    const discovery = await discoverOneWayLegs(stagedProvider(four, {}, queries), {
+      window: { ...window, departure: { from: "2026-12-24", to: "2027-01-01" } },
+      currency: "EUR",
+      travelers: 2,
+      origins: [
+        ...origins,
+        { airport: TZL, distanceKm: 71, isPrimary: false },
+        { airport: CIA, distanceKm: 120, isPrimary: false },
+      ],
+      callBudget: 12,
+      multiCity: true,
+    });
+    expect(discovery.callsPlanned).toBeLessThanOrEqual(12);
+    expect(stagesOf(queries)).toEqual(["return", "return", "return"]);
+    expect(discovery.skipped.filter((entry) => entry.stage === "onward").length).toBeGreaterThan(0);
+  });
+
+  it("never exceeds the budget with every dimension turned on", async () => {
+    const discovery = await discoverOneWayLegs(stagedProvider(four, {}), {
+      window,
+      currency: "EUR",
+      travelers: 2,
+      origins: [...origins, { airport: TZL, distanceKm: 71, isPrimary: false }],
+      callBudget: 12,
+      multiCity: true,
+    });
+    expect(discovery.callsPlanned).toBeLessThanOrEqual(12);
+  });
+
+  it("keeps what it found when the budget runs out", async () => {
+    const discovery = await discoverOneWayLegs(
+      stagedProvider(four, { CIA: result([homeward("cia-home", CIA, 3000)]) }),
+      {
+        window,
+        currency: "EUR",
+        travelers: 2,
+        origins,
+        callBudget: 3,
+        multiCity: true,
+      },
+    );
+    expect(discovery.status).not.toBe("failed");
+    expect(discovery.enriched.map((entry) => entry.airport.iata)).toEqual(["CIA"]);
+    expect(discovery.returnsByAirport.get(CIA.id)?.offers).toHaveLength(1);
+  });
+
+  it("gives the same answer twice", async () => {
+    const run = async () => {
+      const queries: FlightSearchQuery[] = [];
+      await discoverOneWayLegs(stagedProvider(four, {}, queries), {
+        window,
+        currency: "EUR",
+        travelers: 2,
+        origins,
+        callBudget: 12,
+        multiCity: true,
+      });
+      return queries.map((query) => `${query.origins.join("+")}->${String(query.destinations)}`);
+    };
+    expect(await run()).toEqual(await run());
+  });
+});
