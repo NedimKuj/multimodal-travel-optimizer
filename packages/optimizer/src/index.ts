@@ -16,4 +16,5 @@ export * from "./one-way-legs.js";
 export * from "./origin-expansion.js";
 export * from "./return-pool.js";
 export * from "./search-trace.js";
+export * from "./transport-pattern.js";
 export * from "./travel-window.js";

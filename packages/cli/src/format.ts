@@ -5,7 +5,13 @@ import {
   type Money,
   type TransportSegment,
 } from "@travel-optimizer/domain";
-import type { DestinationResult, RankedCandidate, SearchTrace } from "@travel-optimizer/optimizer";
+import {
+  PATTERN_LABELS,
+  transportPattern,
+  type DestinationResult,
+  type RankedCandidate,
+  type SearchTrace,
+} from "@travel-optimizer/optimizer";
 
 /*
  * Human-readable output for trip-search.
@@ -102,20 +108,15 @@ function formatDestination(destination: DestinationResult, index: number): strin
   if (best === undefined) return [];
 
   const airports = destination.airports.map((airport) => airport.iata ?? airport.id).join(", ");
-  const openJaw = best.summary.unpricedGaps.length > 0;
-  // More than one stay means the traveler slept in more than one place, which
-  // only a trip of three legs or more does. An open jaw has two cities but one
-  // stay, because the sector between them has no times to divide it by.
-  const multiCity = best.nightsByStay.length > 1;
-  const shape = [multiCity ? "multi-city" : "", openJaw ? "open jaw" : ""].filter(
-    (entry) => entry !== "",
-  );
+  const pattern = transportPattern(best);
+  const openJaw = pattern === "open_jaw" || pattern === "multi_city_open_jaw";
+  const multiCity = pattern === "multi_city" || pattern === "multi_city_open_jaw";
   const cityNames = destination.cities.map((city) => city.name);
   const name =
     cityNames.length === 0
       ? `${destination.airports[0]?.name ?? "Unknown"} (airport only)`
       : cityNames.length > 1
-        ? `${cityNames.join(" → ")}${shape.length > 0 ? ` (${shape.join(", ")})` : ""}`
+        ? `${cityNames.join(" → ")} (${PATTERN_LABELS[pattern]})`
         : `${cityNames[0] ?? ""} (${destination.cities[0]?.countryCode ?? ""})`;
 
   const pricedLegs = best.candidate.segments.filter(
