@@ -11,6 +11,9 @@ import {
   type UtcInstant,
 } from "@travel-optimizer/domain";
 
+import { priceDestinations } from "./accommodation-search.js";
+import type { Shortlist } from "./accommodation-shortlist.js";
+import { createAccommodationBudget, type AccommodationSearchBudget } from "./budget.js";
 import { exploreComposedItineraries } from "./composed-search.js";
 import {
   exploreFlights,
@@ -20,6 +23,7 @@ import {
   type FlightExplorationDeps,
 } from "./flight-exploration.js";
 import type { OriginExpansionRecord } from "./origin-expansion.js";
+import type { AccommodationProvider } from "@travel-optimizer/domain";
 import type { TravelWindow } from "./travel-window.js";
 
 /*
@@ -80,7 +84,20 @@ export interface SearchTrace {
   readonly provider: SearchProviderRecord;
   readonly counts: ExplorationCounts;
   readonly destinations: readonly DestinationResult[];
+  /** How accommodation was priced, when the search got that far (ADR 0016). */
+  readonly accommodation?: AccommodationRecord;
   readonly issues: readonly DomainIssue[];
+}
+
+export interface AccommodationRecord {
+  /** Absent means no provider was configured, not that none was needed. */
+  readonly providerId: string | undefined;
+  readonly shortlisted: number;
+  readonly patterns: readonly string[];
+  readonly queriesPlanned: number;
+  readonly queriesMade: number;
+  readonly budget: AccommodationSearchBudget;
+  readonly failures: readonly ProviderFailure[];
 }
 
 /** Canonical JSON: object keys sorted, so equal requests hash equally. */
@@ -128,6 +145,16 @@ export interface RunSearchOptions {
   readonly now?: () => Date;
   readonly newSearchId?: () => string;
   readonly optimizerVersion?: string;
+  /**
+   * Accommodation is priced only when a provider is configured. None exists
+   * today, so every stay reports `not_searched / no_provider` — a true fact
+   * about the trip, not a stand-in for a price (ADR 0016).
+   */
+  readonly accommodationProvider?: AccommodationProvider;
+  /** Accommodation's own budget, independent of the transport calls. */
+  readonly accommodationCalls?: number;
+  /** How many candidates may be priced. */
+  readonly accommodationShortlist?: number;
 }
 
 /**
@@ -166,11 +193,26 @@ export async function runFlightSearch(
         ...(options.now !== undefined && { now: options.now }),
       });
   const flightsCompletedAt = parseUtcInstant(now().toISOString());
+
+  const accommodationBudget = createAccommodationBudget(options.accommodationCalls ?? 0);
+  const priced = await priceDestinations(exploration.destinations, {
+    request,
+    shortlistLimit: options.accommodationShortlist ?? DEFAULT_ACCOMMODATION_SHORTLIST,
+    budget: accommodationBudget,
+    travelers: request.travelers,
+    currency,
+    ...(options.accommodationProvider !== undefined && {
+      provider: options.accommodationProvider,
+    }),
+    ...(options.signal !== undefined && { signal: options.signal }),
+  });
+  const accommodationCompletedAt = parseUtcInstant(now().toISOString());
   const completedAt = parseUtcInstant(now().toISOString());
 
   const stages: SearchStageRecord[] = [
     { stage: "flights", startedAt, completedAt: flightsCompletedAt },
-    { stage: "optimization", startedAt: flightsCompletedAt, completedAt },
+    { stage: "accommodation", startedAt: flightsCompletedAt, completedAt: accommodationCompletedAt },
+    { stage: "optimization", startedAt: accommodationCompletedAt, completedAt },
     { stage: "complete", startedAt: completedAt, completedAt },
   ];
 
@@ -195,7 +237,27 @@ export async function runFlightSearch(
       ...(exploration.providerMetrics !== undefined && { metrics: exploration.providerMetrics }),
     },
     counts: exploration.counts,
-    destinations: exploration.destinations,
-    issues: exploration.issues,
+    destinations: priced.destinations,
+    accommodation: accommodationRecord(priced, options.accommodationProvider, accommodationBudget),
+    issues: [...exploration.issues, ...priced.issues],
+  };
+}
+
+/** Candidates priced when no limit is given. */
+export const DEFAULT_ACCOMMODATION_SHORTLIST = 10;
+
+function accommodationRecord(
+  priced: { readonly shortlist: Shortlist; readonly search: { readonly queriesPlanned: number; readonly queriesMade: number; readonly failures: readonly ProviderFailure[] } },
+  provider: AccommodationProvider | undefined,
+  budget: AccommodationSearchBudget,
+): AccommodationRecord {
+  return {
+    providerId: provider?.descriptor.id,
+    shortlisted: priced.shortlist.selected.length,
+    patterns: priced.shortlist.patterns,
+    queriesPlanned: priced.search.queriesPlanned,
+    queriesMade: priced.search.queriesMade,
+    budget,
+    failures: priced.search.failures,
   };
 }

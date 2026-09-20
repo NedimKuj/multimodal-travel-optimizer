@@ -87,12 +87,12 @@ describe("formatSearch", () => {
     expect(output).toContain("2. Rome (IT) — FCO");
   });
 
-  it("shows per-person and total cost, labelled transport only", async () => {
+  it("shows per-person and known cost, with what the amount leaves out", async () => {
     const output = formatSearch(await trace(), { limit: 10 });
     // 79.00 fare plus two estimated transfers, per traveler.
-    expect(output).toContain("105.80 EUR / person · 211.60 EUR total · transport only");
+    expect(output).toContain("105.80 EUR / person · 211.60 EUR known cost · excludes some accommodation");
     expect(output).toContain("Fare: cached · includes estimated access transfer (53.60 EUR)");
-    expect(output).toContain("Transport only: accommodation and extras are not included");
+    expect(output).toContain("Each amount covers only what is priced");
     expect(output).toContain("Airport transfers are estimates from a distance model, not quotes");
   });
 
@@ -197,7 +197,7 @@ describe("formatSearch", () => {
       { limit: 10 },
     );
     // 33.33 fare + two 10.80 transfers, each per traveler: 54.93 x 3 = 164.79.
-    expect(output).toContain("54.93 EUR / person · 164.79 EUR total");
+    expect(output).toContain("54.93 EUR / person · 164.79 EUR known cost");
   });
 
   it("names an airport-only destination when no city resolves", async () => {
@@ -280,6 +280,25 @@ describe("open-jaw output", () => {
   });
 });
 
+describe("formatSearch — accommodation coverage", () => {
+  it("reports each stay, with why it has no price", async () => {
+    const output = formatSearch(await trace(), { limit: 10 });
+    expect(output).toContain("Accommodation Istanbul: not searched");
+    expect(output).toContain("no accommodation provider");
+  });
+
+  it("says the amount is a known cost, not a total", async () => {
+    const output = formatSearch(await trace(), { limit: 10 });
+    expect(output).toContain("known cost · excludes some accommodation");
+    expect(output).toContain("The amount above EXCLUDES accommodation that is not priced");
+  });
+
+  it("never presents an unpriced trip as a complete total", async () => {
+    const output = formatSearch(await trace(), { limit: 10 });
+    expect(output).not.toContain("complete trip");
+  });
+});
+
 describe("formatSearch — multi-city", () => {
   const ARRIVAL_OFFSET: Record<string, string> = { [CIA.id]: "+01:00", [MXP.id]: "+01:00" };
 
@@ -351,6 +370,12 @@ describe("formatSearch — multi-city", () => {
   it("names the cities in the order they are visited, and labels the shape", async () => {
     const output = formatSearch(await multiCityTrace(), { limit: 10 });
     expect(output).toContain("Rome → Milan (multi-city)");
+  });
+
+  it("reports a stay per city", async () => {
+    const output = formatSearch(await multiCityTrace(), { limit: 10 });
+    expect(output).toContain("Accommodation Rome: not searched");
+    expect(output).toContain("Accommodation Milan: not searched");
   });
 
   it("gives the nights per city rather than one total", async () => {

@@ -97,18 +97,35 @@ describe("runFlightSearch", () => {
     const result = await trace();
     expect(result.stages.map((stage) => stage.stage)).toEqual([
       "flights",
+      "accommodation",
       "optimization",
       "complete",
     ]);
-    // No fake accommodation or open-jaw stage.
-    expect(result.stages.some((stage) => stage.stage === "accommodation")).toBe(false);
+    // Ground transport has no licensed source, so it is absent rather than
+    // reported as an empty stage.
+    expect(result.stages.some((stage) => stage.stage === "ground_transport")).toBe(false);
+  });
+
+  it("runs the accommodation stage without a provider, and says so", async () => {
+    const result = await trace();
+    expect(result.accommodation?.providerId).toBeUndefined();
+    expect(result.accommodation?.queriesMade).toBe(0);
+    // Every stay reports why it has no price, rather than showing none.
+    const coverage = result.destinations
+      .flatMap((destination) => destination.candidates)
+      .flatMap((candidate) => candidate.summary.accommodation);
+    expect(coverage.length).toBeGreaterThan(0);
+    expect(coverage.every((entry) => entry.state === "not_searched")).toBe(true);
+    expect(
+      coverage.every((entry) => "reason" in entry && entry.reason === "no_provider"),
+    ).toBe(true);
   });
 
   it("times the run", async () => {
     const result = await trace();
     expect(result.startedAt).toBe("2026-09-18T09:00:00.000Z");
     // The clock also stamps the estimates the exploration produces.
-    expect(result.completedAt).toBe("2026-09-18T09:00:03.000Z");
+    expect(result.completedAt).toBe("2026-09-18T09:00:04.000Z");
   });
 
   it("keeps the trace when the search fails", async () => {

@@ -69,6 +69,46 @@ function formatLeg(segment: TransportSegment): string {
   );
 }
 
+/**
+ * What accommodation is known for each stay.
+ *
+ * Each component keeps its own label: a missing bed never relabels a retrieved
+ * fare, and no state but `priced` contributes an amount (ADR 0016).
+ */
+function formatAccommodation(candidate: RankedCandidate): string[] {
+  const entries = candidate.summary.accommodation;
+  if (entries.length === 0) return [];
+
+  const nights = (count: number) => `${String(count)} night${count === 1 ? "" : "s"}`;
+  const lines = entries.map((entry) => {
+    if (entry.state === "priced") {
+      return `   Accommodation ${entry.city.name}: ${formatMoney(entry.stay.price)} — ${entry.stay.provenance.sourceType} · ${nights(entry.nights)}`;
+    }
+    if (entry.state === "unresolved") {
+      const where = entry.cities.map((city) => city.name).join("/");
+      return `   Accommodation: unresolved — ${nights(entry.nights)} across ${where}, allocation undeterminable`;
+    }
+    const why =
+      entry.reason === "provider_no_results"
+        ? "provider had nothing"
+        : entry.reason === "provider_unavailable"
+          ? "provider unavailable"
+          : entry.reason === "no_provider"
+            ? "no accommodation provider"
+            : entry.reason === "outside_shortlist"
+              ? "not among the priced finalists"
+              : "not searched";
+    const state = entry.state === "unpriced" ? "unpriced" : "not searched";
+    return `   Accommodation ${entry.city.name}: ${state} — ${nights(entry.nights)} · ${why}`;
+  });
+
+  const priced = entries.every((entry) => entry.state === "priced");
+  if (!priced) {
+    lines.push("   The amount above EXCLUDES accommodation that is not priced");
+  }
+  return lines;
+}
+
 /** "Fare: cached · includes estimated transfer (9.00 EUR)" */
 function formatProvenanceLine(candidate: RankedCandidate): string {
   const { provenance, cost } = candidate.summary;
@@ -101,6 +141,18 @@ function formatProvenance(candidate: RankedCandidate): string {
       ? "no provider expiry (freshness unknown)"
       : `expires ${offer.provenance.expiresAt.slice(0, 16).replace("T", " ")}`;
   return `   ${offer.provenance.sourceType} price · checked ${fetched}Z · ${offer.provenance.provider} · ${expiry}`;
+}
+
+/** What the amount covers, in the terms a traveler would use. */
+function scopeLabel(candidate: RankedCandidate): string {
+  const { exclusions, scope } = candidate.summary.cost;
+  if (scope === "complete") return "complete trip";
+  const missing = [
+    exclusions.includes("unpriced_segment") ? "an unpriced sector" : "",
+    exclusions.includes("accommodation") ? "some accommodation" : "",
+    exclusions.includes("unresolved_accommodation") ? "unresolved accommodation" : "",
+  ].filter((entry) => entry !== "");
+  return `excludes ${missing.join(" and ")}`;
 }
 
 function formatDestination(destination: DestinationResult, index: number): string[] {
@@ -136,8 +188,8 @@ function formatDestination(destination: DestinationResult, index: number): strin
   const lines = [
     `${String(index + 1)}. ${name} — ${airports}`,
     openJaw
-      ? `   Known cost: ${formatPerPerson(best)} / person · ${formatMoney(best.summary.cost.total)} · transport only`
-      : `   ${formatPerPerson(best)} / person · ${formatMoney(best.summary.cost.total)} total · transport only`,
+      ? `   Known cost: ${formatPerPerson(best)} / person · ${formatMoney(best.summary.cost.total)} · ${scopeLabel(best)}`
+      : `   ${formatPerPerson(best)} / person · ${formatMoney(best.summary.cost.total)} ${best.summary.cost.scope === "complete" ? "total" : "known cost"} · ${scopeLabel(best)}`,
     ...best.summary.unpricedGaps.map(
       (gap) =>
         `   ${gap.from.iata ?? gap.from.name} → ${gap.to.iata ?? gap.to.name}: ${gap.distanceKm === undefined ? "distance unknown" : `${String(Math.round(gap.distanceKm))} km`}, UNPRICED — arrange separately`,
@@ -150,6 +202,7 @@ function formatDestination(destination: DestinationResult, index: number): strin
         ]
       : []),
     formatProvenanceLine(best),
+    ...formatAccommodation(best),
     // Only in-segment stops are shown. `connections` counts changes with no
     // stay in between (ADR 0005), and until accommodation exists every trip
     // has one for its destination stay, which is not a transfer.
@@ -356,7 +409,7 @@ export function formatSearch(trace: SearchTrace, options: FormatOptions): string
   }
 
   lines.push(
-    "Transport only: accommodation and extras are not included. Airport transfers are estimates from a distance model, not quotes, and cached fares are not guaranteed bookable.",
+    "Each amount covers only what is priced; every stay says what is known about it. Airport transfers are estimates from a distance model, not quotes, and cached fares are not guaranteed bookable.",
   );
   for (const failure of trace.provider.failures) {
     lines.push(`Provider issue (${failure.kind}): ${failure.message}`);

@@ -6,6 +6,7 @@ import {
   type ProviderCallMetrics,
   type ProviderFailure,
   type DomainIssue,
+  type SearchRequest,
   type Stay,
   type StaySearchQuery,
   type TripCandidate,
@@ -19,7 +20,12 @@ import {
   type AccommodationSearchBudget,
   type SkippedStaySearch,
 } from "./budget.js";
-import type { RankedCandidate } from "./flight-exploration.js";
+import { buildShortlist, type Shortlist } from "./accommodation-shortlist.js";
+import {
+  compareCandidates,
+  type DestinationResult,
+  type RankedCandidate,
+} from "./flight-exploration.js";
 
 /*
  * Pricing the shortlist (ADR 0016 §7).
@@ -283,4 +289,76 @@ export function applyAccommodation(
     ok: true,
     candidate: { ...candidate, candidate: trip, summary: summarized.summary },
   };
+}
+
+export interface PriceDestinationsOptions extends AccommodationSearchOptions {
+  readonly request: SearchRequest;
+  /** How many candidates may be priced (ADR 0016 §5). */
+  readonly shortlistLimit: number;
+}
+
+export interface PricedDestinations {
+  readonly destinations: readonly DestinationResult[];
+  readonly shortlist: Shortlist;
+  readonly search: AccommodationSearchResult;
+  /** Candidates whose coverage could not be applied, which is a defect. */
+  readonly issues: readonly DomainIssue[];
+}
+
+/**
+ * Prices a search's finalists and re-ranks everything around them.
+ *
+ * The order after pricing may differ substantially from the transport order
+ * that chose the shortlist. That is the point: a trip is judged on what it
+ * costs to take, not on its fares alone.
+ */
+export async function priceDestinations(
+  destinations: readonly DestinationResult[],
+  options: PriceDestinationsOptions,
+): Promise<PricedDestinations> {
+  const all = destinations.flatMap((destination) => destination.candidates);
+  const shortlist = buildShortlist(all, {
+    request: options.request,
+    limit: options.shortlistLimit,
+  });
+  const search = await searchAccommodation(shortlist.selected, options);
+  const issues: DomainIssue[] = [];
+
+  // Anything not priced says why it was not: no provider at all, or a
+  // shortlist it did not make. Never "unpriced", which would claim an answer.
+  const fallback = options.provider === undefined ? "no_provider" : "outside_shortlist";
+  const updated = new Map<string, RankedCandidate>();
+  for (const candidate of all) {
+    const entries =
+      search.byCandidate.get(candidate.candidate.id) ??
+      candidate.stayIntervals.map((interval) => unsearched(interval, fallback));
+    const applied = applyAccommodation(candidate, entries);
+    if (applied.ok) {
+      updated.set(candidate.candidate.id, applied.candidate);
+      continue;
+    }
+    // Keep the transport candidate rather than losing it to a coverage defect.
+    updated.set(candidate.candidate.id, candidate);
+    issues.push(...applied.issues);
+  }
+
+  const repriced = destinations
+    .map((destination) => ({
+      ...destination,
+      candidates: destination.candidates
+        .map((candidate) => updated.get(candidate.candidate.id) ?? candidate)
+        .sort(compareCandidates),
+    }))
+    .sort((a, b) => {
+      const [first] = a.candidates;
+      const [second] = b.candidates;
+      if (first === undefined || second === undefined) return 0;
+      const byCandidate = compareCandidates(first, second);
+      if (byCandidate !== 0) return byCandidate;
+      const aKey = a.city?.id ?? a.airports[0]?.id ?? "";
+      const bKey = b.city?.id ?? b.airports[0]?.id ?? "";
+      return aKey < bKey ? -1 : aKey > bKey ? 1 : 0;
+    });
+
+  return { destinations: repriced, shortlist, search, issues };
 }
