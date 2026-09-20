@@ -2184,15 +2184,58 @@ outside the requested range rather than an absent way home.
 
 ## Phase 4 — Accommodation
 
-Add hotel provider.
+Attach accommodation to the stays the itinerary already has, and produce a
+complete trip cost where one can honestly be produced.
 
-Generate complete trip cost.
+**The provider adapter is blocked on credentials.** Hotellook closed in late
+2025 and Travelpayouts offers no hotel API to partners today (probed
+2026-09-18: `lookup.json`, `cache.json` and `/v2/prices/hotels` all 404 or 403).
+No adapter is written until commercial terms are verified and the provider is
+documented in `docs/provider-compliance.md`. The domain model, coverage
+semantics, shortlist and search plumbing are built now against fixtures; nothing
+is simulated as if it were real data.
 
-**Blocked on credentials.** Hotellook closed in late 2025 and Travelpayouts
-offers no hotel API to partners today (probed 2026-09-18: `lookup.json`,
-`cache.json` and `/v2/prices/hotels` all 404 or 403). This phase needs an
-account with a different accommodation provider before any of it can be built;
-nothing here may be simulated in the meantime.
+### Accommodation is per stay, and says what it knows
+
+One stay per period on the ground, reusing the intervals the nights calculation
+already derives — so an access transfer that delays arrival delays the stay.
+Each carries a coverage state (`docs/decisions/0016-accommodation-coverage.md`):
+
+```text
+priced        queried, at least one usable offer
+not_searched  no query was performed
+unpriced      queried; no usable price obtained
+unresolved    no valid search can be constructed
+```
+
+Only `priced` contributes an amount. A failed provider call and an empty result
+are both `unpriced` but keep different reasons, because an outage is not an
+answer.
+
+### Open jaw: the split is not invented
+
+`SJJ → A`, `B → SJJ` with an unpriced `A → B` carries no timing, so the nights
+cannot be divided between A and B. That stay is `unresolved`, names both cities,
+and contributes nothing. It is reported separately from the unpriced-transport
+exclusion — two different holes in one itinerary.
+
+### The finalist shortlist
+
+Global top-N by transport cost with a pattern floor, reserving before filling
+(`docs/optimizer-spec.md` §15). Candidates whose transport cost already excludes
+a sector are not eligible and are not made eligible to fill a pattern slot; they
+are retained as incomplete secondary results. Accommodation has its own
+provider budget, independent of the 12 transport calls, and identical stay
+searches are deduplicated across the shortlist.
+
+### Ranking
+
+Three classes: complete, accommodation-incomplete, unpriced transport sector.
+A cheaper known cost never outranks a fuller one. Ranking after accommodation
+may differ substantially from the transport ranking that built the shortlist.
+
+Phase 4 is done when the plumbing is implemented and verified against fixtures,
+transport behaviour is unchanged, and no adapter has been added.
 
 ---
 

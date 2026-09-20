@@ -631,6 +631,49 @@ Destinations that are never queried are recorded as **skipped, with the
 reason**, so a budget-limited search says so. Provider response order must
 never decide which destinations receive the remaining calls.
 
+### The accommodation shortlist
+
+Accommodation is priced for a **finalist shortlist**, never for every transport
+candidate. The shortlist reserves before it fills, so nothing already chosen can
+be displaced and the result cannot depend on the order patterns are considered
+in:
+
+```text
+1. eligible    transport-valid; transport cost complete; no unpriced sector;
+               every stay resolvable
+2. rank        the existing candidate order: cost, travel time, id
+3. reserve     each eligible transport pattern's cheapest eligible candidate
+4. fill        the remaining slots from the global ranking
+5. dedupe      collapse to distinct stay searches
+6. search      one provider call per distinct search
+7. rank        by class, then amount (§19)
+```
+
+The four transport patterns are mutually exclusive:
+
+```text
+round_trip   open_jaw   multi_city   multi_city_open_jaw
+```
+
+so one candidate reserves at most one slot. Whenever the shortlist is at least
+as large as the number of eligible patterns, **every eligible pattern is
+represented**; below that, the patterns dropped are recorded rather than
+silently lost.
+
+Destination diversity is deliberately *not* guaranteed: it is secondary to
+transport cost, and stratifying by `pattern × destination` would multiply
+provider calls.
+
+Candidates whose transport cost already excludes an unpriced sector are **not
+eligible**, and are not made eligible merely to fill a pattern slot. They are
+retained as incomplete secondary results with their exclusions and provenance
+intact. Since every open jaw carries such a sector while no licensed surface
+transport source exists, the pattern floor currently operates over
+`round_trip` and `multi_city` alone.
+
+Ranking after accommodation may differ substantially from the transport ranking
+that built the shortlist. That is expected.
+
 ### Provider call budget
 
 The number of provider calls per search is capped by an **application-level
@@ -638,6 +681,10 @@ budget** (currently 12). Every optional dimension — alternative origins,
 return-leg enrichment, onward-leg discovery — draws on the same budget, and a
 query that cannot fit is refused or recorded as skipped rather than silently
 truncated.
+
+Accommodation is **not** one of those dimensions: it is a different source with
+different economics, and has its own budget (§20). The transport budget is
+never read or increased to pay for it.
 
 A **logical query** is one question asked of the provider. It costs as many
 provider calls as its date range spans calendar months, because this provider
@@ -821,18 +868,46 @@ excludes_unpriced_segment     an unpriced gap is not in the number
 transport_and_partial_accommodation   nights without accommodation
 ```
 
+Every reason is listed separately in `exclusions`, because a trip can be
+incomplete in more than one way at once:
+
+```text
+unpriced_segment          a sector of the journey has no price
+accommodation             nights were searched and left uncovered
+unresolved_accommodation  the stay cannot be determined at all (§20)
+```
+
 An amount that excludes a sector is a **known cost**, not a total, and is never
 compared against a complete total as though the two meant the same thing.
+
+### Ranking classes
+
+Comparability is enforced by class, so amounts of different scope are never
+compared numerically:
+
+```text
+0  complete                    transport and accommodation both fully priced
+1  accommodation incomplete    a stay is unpriced, unresolved or not searched
+2  unpriced transport sector   a leg of the journey has no price
+```
+
+Candidates are ordered by class first, and only then by amount, travel time and
+id. A cheaper known cost never outranks a fuller one: doing so would reward an
+itinerary for what it leaves out.
+
+**Missing accommodation is never zero, never estimated and never a penalty.**
+The total sums priced components only, so a trip with one stay priced and
+another unpriced contributes just the priced stay — and its class says the
+number is not a total.
 
 ---
 
 ## 20. Accommodation
 
-Accommodation should be searched after transport candidates have been reduced to a manageable finalist set.
+Accommodation is searched **after** transport candidates have been reduced to a
+finalist shortlist (§15), which avoids unnecessary provider calls.
 
-This avoids unnecessary provider calls.
-
-A stay must be associated with:
+A priced stay must be associated with:
 
 - destination city
 - check-in
@@ -845,7 +920,67 @@ A stay must be associated with:
 - provider reference
 - source timestamps
 
-Accommodation cost must be included in final trip cost.
+Accommodation cost is included in the final trip cost **when it is known**.
+
+### Accommodation is modelled per stay
+
+A trip has one accommodation stay per period on the ground, not one trip-level
+price. A multi-city trip therefore has several independent stays, and a night
+belonging to a transport gap is assigned to neither adjacent city.
+
+Stay intervals are not invented: they are the periods between consecutive legs,
+already derived for the nights calculation (§9), so an access transfer that
+delays arrival also delays the start of the stay.
+
+### Coverage
+
+Every stay carries a coverage state saying what actually happened:
+
+```text
+priced        a query ran and returned at least one usable offer
+not_searched  no accommodation query was performed
+unpriced      a query was attempted; no usable price was obtained
+unresolved    no valid search can be constructed at all
+```
+
+A reason explains the state without replacing it. `not_searched` distinguishes
+being outside the shortlist from having no provider configured. `unpriced`
+distinguishes a provider that answered with no availability from a provider that
+could not be reached — **a failed call is not the same fact as an empty
+answer**, and collapsing them would let an outage read as a result.
+
+Only `priced` contributes an amount. The invariant is the one that governs
+prices everywhere in this system: **unknown ≠ zero ≠ estimated**.
+
+### Unresolved allocation
+
+An open jaw arrives in one city and departs from another with an unpriced sector
+between them, and that sector carries no times. The optimizer therefore **cannot
+determine how many nights belong to each city**, and must not guess, split
+arbitrarily, or attribute the whole stay to one of them.
+
+Such a stay is `unresolved`, names every city it spans, and contributes no
+amount. It is reported separately from the unpriced-transport-gap exclusion,
+because they are different holes in the same itinerary:
+
+```text
+Flights: 142.00 EUR
+Accommodation: unresolved — allocation across Vienna/Prague undeterminable
+Vienna → Prague: unpriced transport gap
+Known cost: 142.00 EUR
+Cost scope: excludes unpriced transport + unresolved accommodation
+```
+
+When a licensed source later supplies the `A → B` timing, the ordinary
+stay-splitting rules resolve this without a domain-model change.
+
+### Provider economics
+
+Accommodation has its own provider budget, configurable and **independent of the
+transport call budget** (§15): a different source with different quotas and
+economics. Identical searches — same city, dates, occupancy and currency — are
+deduplicated across the shortlist, so five candidates sharing one stay cost one
+query, not five.
 
 ---
 
