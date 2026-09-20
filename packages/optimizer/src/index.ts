@@ -1,3 +1,4 @@
+export * from "./accommodation-search.js";
 export * from "./accommodation-shortlist.js";
 export * from "./accommodation-stays.js";
 export * from "./budget.js";
