@@ -25,6 +25,7 @@ import {
 } from "@travel-optimizer/domain";
 
 import type { SkippedQuery } from "./budget.js";
+import type { ReachSource } from "./return-pool.js";
 import {
   DEFAULT_CONNECTION_RULES,
   requiredConnectionMinutes,
@@ -108,7 +109,15 @@ export interface ExplorationCounts {
 }
 
 export interface DiscoveryRecord {
-  readonly enriched: readonly { readonly airport: Location; readonly returnOffersFound: number }[];
+  /** Way-home queries made, and why each candidate was chosen (ADR 0015 §7). */
+  readonly enriched: readonly {
+    readonly airport: Location;
+    readonly city: Location | undefined;
+    readonly via: readonly Location[];
+    readonly reachCostMinor: number;
+    readonly source: ReachSource;
+    readonly returnOffersFound: number;
+  }[];
   /** Destinations asked where they could go on to, and what came back. */
   readonly onward: readonly { readonly airport: Location; readonly onwardOffersFound: number }[];
   /** Queries the search chose not to make, in the shared shape (`budget.ts`). */

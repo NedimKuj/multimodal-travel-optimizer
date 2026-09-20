@@ -1,11 +1,13 @@
-import type {
-  CurrencyCode,
-  FlightProvider,
-  Location,
-  ProviderCallMetrics,
-  ProviderFailure,
-  TransportOffer,
-  TransportSegment,
+import {
+  lookupCityForAirport,
+  type CityRepository,
+  type CurrencyCode,
+  type FlightProvider,
+  type Location,
+  type ProviderCallMetrics,
+  type ProviderFailure,
+  type TransportOffer,
+  type TransportSegment,
 } from "@travel-optimizer/domain";
 
 import {
@@ -18,7 +20,13 @@ import {
   spend,
   type SkippedQuery,
 } from "./budget.js";
+import { legsFrom, MAX_OFFERS_PER_AIRPORT, oneWayLegs } from "./one-way-legs.js";
 import type { SelectedOrigin } from "./origin-expansion.js";
+import {
+  createReturnPool,
+  type ReachSource,
+  type ReturnCandidate,
+} from "./return-pool.js";
 import type { TravelWindow } from "./travel-window.js";
 
 /*
@@ -26,24 +34,38 @@ import type { TravelWindow } from "./travel-window.js";
  *
  * Stage 1 asks one broad question: where can we fly from here? Stage 2 finds
  * ways home. Stage 3, for multi-city, asks the same broad question again from
- * each destination: where can we go on to? Destinations are chosen
- * deterministically rather than by whatever order the provider answered in.
+ * each destination: where can we go on to?
+ *
+ * Stages 2 and 3 feed each other. A second city stage 3 reaches becomes a
+ * candidate for a way home in its own right, ranked against the stage-1
+ * destinations by what it is already known to cost to get there
+ * (`return-pool.ts`, ADR 0015 §7). Candidates are chosen deterministically
+ * rather than by whatever order the provider answered in.
  *
  * The call budget is an application-level safety limit shared by every optional
  * dimension of a search. It is not a claim about the provider's own quota,
  * which is unverified (docs/provider-compliance.md).
  */
 
+/** What a way-home query was spent on, and why it was chosen. */
 export interface EnrichmentRecord {
   readonly airport: Location;
-  /** Cheapest outbound fare found for it, in minor units. */
-  readonly cheapestOutboundMinor: number;
+  /** The city it serves, when the reference data resolves one (ADR 0010). */
+  readonly city: Location | undefined;
+  /** Airports passed through to get here, home excluded. */
+  readonly via: readonly Location[];
+  /** Fares already known to reach it, in minor units; never a prediction. */
+  readonly reachCostMinor: number;
+  readonly source: ReachSource;
   readonly returnOffersFound: number;
 }
 
-/** A destination a query was not spent on, in the shared shape (`budget.ts`). */
+/** A candidate a query was not spent on, in the shared shape (`budget.ts`). */
 export interface SkippedDestination extends SkippedQuery {
-  readonly cheapestOutboundMinor: number;
+  readonly city: Location | undefined;
+  readonly via: readonly Location[];
+  readonly reachCostMinor: number;
+  readonly source: ReachSource;
 }
 
 /** A destination asked where it could go on to next (stage 3). */
@@ -81,6 +103,8 @@ export interface DiscoveryOptions {
   readonly currency: CurrencyCode;
   readonly travelers: number;
   readonly origins: readonly SelectedOrigin[];
+  /** Resolves the city behind an airport, for grouping and presentation. */
+  readonly cities: CityRepository;
   readonly callBudget?: number;
   /** Cap on destinations enriched, before the budget is even considered. */
   readonly maxEnrichedDestinations?: number;
@@ -92,6 +116,11 @@ export interface DiscoveryOptions {
   readonly multiCity?: boolean;
   /** Overrides the guaranteed return-leg floor; for tests and tuning. */
   readonly guaranteedReturnQueries?: number;
+  /**
+   * Onward legs per airport admitted to the return pool. Must match what
+   * composition pairs, or a call is spent on a leg that is then pruned.
+   */
+  readonly maxOnwardLegsPerAirport?: number;
   readonly signal?: AbortSignal;
 }
 
@@ -191,6 +220,7 @@ export async function discoverOneWayLegs(
   const enriched: EnrichmentRecord[] = [];
   const onward: OnwardRecord[] = [];
   const skipped: SkippedDestination[] = [];
+  const pool = createReturnPool();
 
   const returnCallCost = costOfQuery(options.window.return);
   // An onward leg may depart any time the traveler is away, so it is priced
@@ -198,23 +228,43 @@ export async function discoverOneWayLegs(
   const onwardCallCost = costOfQuery(options.window.outerBounds);
   const homeCode = primary.airport.iata ?? primary.airport.id;
 
+  const maxOnwardLegs = options.maxOnwardLegsPerAirport ?? MAX_OFFERS_PER_AIRPORT;
+  const cityFor = (airport: Location): Location | undefined => {
+    const lookup = lookupCityForAirport(options.cities, airport);
+    return lookup.ok ? lookup.city : undefined;
+  };
+
+  /** A stage-1 destination, as a candidate for a way home. */
+  const directCandidate = (candidate: Candidate): ReturnCandidate => ({
+    airport: candidate.airport,
+    city: cityFor(candidate.airport),
+    path: {
+      via: [candidate.airport],
+      reachCostMinor: candidate.cheapestOutboundMinor,
+      source: "stage_1",
+    },
+  });
+
   const skip = (
-    candidate: Candidate,
+    candidate: ReturnCandidate,
     stage: "return" | "onward",
     reason: SkippedQuery["reason"],
   ): void => {
     const record = {
       stage,
       airport: candidate.airport,
-      cheapestOutboundMinor: candidate.cheapestOutboundMinor,
+      city: candidate.city,
+      via: candidate.path.via,
+      reachCostMinor: candidate.path.reachCostMinor,
+      source: candidate.path.source,
       reason,
     };
     skipped.push(record);
     recordSkip(budget, record);
   };
 
-  /** Asks how to get home from one destination. */
-  const queryReturn = async (candidate: Candidate): Promise<void> => {
+  /** Asks how to get home from one place an itinerary could end. */
+  const queryReturn = async (candidate: ReturnCandidate): Promise<void> => {
     const code = candidate.airport.iata ?? candidate.airport.id;
     spend(budget, returnCallCost);
     const back = await provider.search(
@@ -230,19 +280,26 @@ export async function discoverOneWayLegs(
     metrics.push(back.metrics);
     failures.push(...back.failures);
 
+    const record = {
+      airport: candidate.airport,
+      city: candidate.city,
+      via: candidate.path.via,
+      reachCostMinor: candidate.path.reachCostMinor,
+      source: candidate.path.source,
+    };
     if (back.status === "failed") {
-      enriched.push({ ...candidate, returnOffersFound: 0 });
+      enriched.push({ ...record, returnOffersFound: 0 });
       return;
     }
     returnsByAirport.set(candidate.airport.id, {
       segments: back.data.segments,
       offers: back.data.offers,
     });
-    enriched.push({ ...candidate, returnOffersFound: back.data.offers.length });
+    enriched.push({ ...record, returnOffersFound: back.data.offers.length });
   };
 
   /** Asks where a destination can be travelled on to (stage 3). */
-  const queryOnward = async (candidate: Candidate): Promise<void> => {
+  const queryOnward = async (candidate: ReturnCandidate): Promise<void> => {
     const code = candidate.airport.iata ?? candidate.airport.id;
     spend(budget, onwardCallCost);
     const on = await provider.search(
@@ -267,20 +324,49 @@ export async function discoverOneWayLegs(
       offers: on.data.offers,
     });
     onward.push({ airport: candidate.airport, onwardOffersFound: on.data.offers.length });
+
+    // Every second city reached becomes a candidate for a way home of its own,
+    // ranked against the stage-1 destinations by what it is already known to
+    // cost to get there. Only the legs composition will actually pair are
+    // admitted, so a call is never spent on one it would prune (ADR 0015 §7).
+    for (const leg of legsFrom(
+      oneWayLegs(on.data.segments, on.data.offers),
+      candidate.airport.id,
+      maxOnwardLegs,
+    )) {
+      const second = leg.segment.destination;
+      pool.offer({
+        airport: second,
+        city: cityFor(second),
+        path: {
+          via: [...candidate.path.via, second],
+          reachCostMinor: candidate.path.reachCostMinor + leg.offer.price.amountMinor,
+          source: "onward",
+        },
+      });
+    }
   };
 
   // Stages 2 and 3 share what stage 1 left (ADR 0015). Ways home are
   // guaranteed a floor, then the two stages alternate, which adapts to how many
   // candidates each actually has in a way a fixed proportion would not.
-  const returnQueue = [...shortlist];
-  const onwardQueue = options.multiCity === true ? [...shortlist] : [];
+  //
+  // Only where the return candidates come from has changed: a growing pool fed
+  // by both stages, rather than stage 1 alone (ADR 0015 §7).
+  const stageOne = shortlist.map(directCandidate);
+  for (const candidate of stageOne) pool.offer(candidate);
+  // Onward discovery starts only from stage-1 destinations, which fixes the
+  // depth of a trip at SJJ -> A -> B -> SJJ rather than opening a traversal.
+  const onwardQueue = options.multiCity === true ? [...stageOne] : [];
 
   let guaranteed = Math.min(
     options.guaranteedReturnQueries ?? GUARANTEED_RETURN_QUERIES,
-    returnQueue.length,
+    pool.size(),
   );
   while (guaranteed > 0) {
-    const candidate = returnQueue.shift();
+    // No onward query has run yet, so the pool holds stage-1 destinations only
+    // and the floor lands exactly where it always has.
+    const candidate = pool.take();
     if (candidate === undefined) break;
     guaranteed -= 1;
     // The floor is hard against onward discovery, never against the budget.
@@ -291,7 +377,10 @@ export async function discoverOneWayLegs(
     await queryReturn(candidate);
   }
 
-  // After the floor: return, onward, return, onward, while anything fits.
+  // After the floor: return, onward, return, onward, while anything fits. An
+  // onward query refills the pool, so a return turn that found nothing this
+  // round may well find something the next: the loop ends when a whole round
+  // runs nothing, not when the pool happens to be empty.
   type Stage = "return" | "onward";
   let next: Stage = "return";
   for (;;) {
@@ -299,13 +388,16 @@ export async function discoverOneWayLegs(
       next === "return" ? ["return", "onward"] : ["onward", "return"];
     let ran = false;
     for (const stage of order) {
-      const queue = stage === "return" ? returnQueue : onwardQueue;
       const cost = stage === "return" ? returnCallCost : onwardCallCost;
-      const head = queue[0];
+      const head = stage === "return" ? pool.peek() : onwardQueue[0];
       if (head === undefined || !canAfford(budget, cost)) continue;
-      queue.shift();
-      if (stage === "return") await queryReturn(head);
-      else await queryOnward(head);
+      if (stage === "return") {
+        pool.take();
+        await queryReturn(head);
+      } else {
+        onwardQueue.shift();
+        await queryOnward(head);
+      }
       next = stage === "return" ? "onward" : "return";
       ran = true;
       break;
@@ -314,13 +406,13 @@ export async function discoverOneWayLegs(
   }
 
   // Whatever neither stage could reach is recorded, never dropped quietly.
-  for (const candidate of returnQueue) skip(candidate, "return", "call_budget");
+  for (const candidate of pool.remaining()) skip(candidate, "return", "call_budget");
   for (const candidate of onwardQueue) skip(candidate, "onward", "call_budget");
 
   // Destinations past the enrichment cap were never candidates for a call: a
   // limit of ours stopped them, not the budget.
   for (const candidate of ranked.slice(shortlist.length)) {
-    skip(candidate, "return", "cap");
+    skip(directCandidate(candidate), "return", "cap");
   }
 
   return {

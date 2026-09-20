@@ -514,6 +514,54 @@ describe("multi-city (patterns 3 and 4)", () => {
     expect(threeLeg(result)).toEqual([]);
   });
 
+  it("completes a trip through a city stage 1 never found", async () => {
+    // Milan is unreachable from home: the only way there is on from Rome. Its
+    // way home exists solely because onward discovery put it in the return
+    // pool in its own right (ADR 0015 §7).
+    const onlyOnward = provider(
+      [outboundLeg("out-cia", CIA, 4000)],
+      { CIA: [returnLeg("back-cia", CIA, 3000)], MXP: [returnLeg("back-mxp", MXP, 3500)] },
+      { CIA: [onwardLeg("cia-mxp", CIA, MXP, 2000)] },
+    );
+    const result = await exploreComposedItineraries(
+      request({ allowMultiCity: true }),
+      deps(onlyOnward),
+      options,
+    );
+    const [trip] = threeLeg(result);
+    expect(trip).toBeDefined();
+    expect(trip?.candidate.segments.filter((leg) => leg.mode === "flight").map((leg) => leg.origin.iata)).toEqual([
+      "SJJ",
+      "CIA",
+      "MXP",
+    ]);
+    // 40.00 out + 20.00 on + 35.00 home, per traveler, for two.
+    expect(trip?.summary.cost.fares).toEqual({ amountMinor: 19000, currency: "EUR" });
+    expect(trip?.summary.unpricedGaps).toEqual([]);
+    expect(trip?.nightsByStay).toEqual([3, 3]);
+    expect(result.counts.secondCitiesWithoutReturn).toBe(0);
+  });
+
+  it("pairs every second city it spent a way-home query on", async () => {
+    // Whatever discovery admitted to the return pool, composition must be
+    // willing to pair, or a provider call was spent on a leg it then prunes.
+    const result = await exploreComposedItineraries(
+      request({ allowMultiCity: true }),
+      deps(viaMilan),
+      options,
+    );
+    const queriedOnward = (result.discovery?.enriched ?? [])
+      .filter((entry) => entry.source === "onward")
+      .map((entry) => entry.airport.iata);
+    const paired = new Set(
+      result.destinations
+        .flatMap((destination) => destination.candidates)
+        .flatMap((candidate) => candidate.candidate.segments)
+        .map((leg) => leg.destination.iata),
+    );
+    for (const code of queriedOnward) expect(paired.has(code)).toBe(true);
+  });
+
   it("counts second cities it reached but cannot get home from", async () => {
     const stranded = provider(
       [outboundLeg("out-cia", CIA, 4000)],

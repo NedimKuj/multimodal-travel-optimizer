@@ -102,6 +102,7 @@ export async function exploreComposedItineraries(
     currency: options.currency,
     travelers: request.travelers,
     origins: expansion.origins,
+    cities: deps.cities,
     ...(options.callBudget !== undefined && { callBudget: options.callBudget }),
     ...(options.maxEnrichedDestinations !== undefined && {
       maxEnrichedDestinations: options.maxEnrichedDestinations,
@@ -115,6 +116,10 @@ export async function exploreComposedItineraries(
   const discoveryRecord = {
     enriched: discovery.enriched.map((entry) => ({
       airport: entry.airport,
+      city: entry.city,
+      via: entry.via,
+      reachCostMinor: entry.reachCostMinor,
+      source: entry.source,
       returnOffersFound: entry.returnOffersFound,
     })),
     onward: discovery.onward.map((entry) => ({
