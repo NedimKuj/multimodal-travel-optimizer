@@ -1,6 +1,7 @@
 import { failedResult } from "@travel-optimizer/domain";
 import { describe, expect, it } from "vitest";
 
+import { exploreFlights, type RankedCandidate } from "./flight-exploration.js";
 import { OPTIMIZER_VERSION, runFlightSearch, searchFingerprint } from "./search-trace.js";
 import {
   cityRepository,
@@ -14,6 +15,14 @@ import {
   searchResult,
   stubFlightProvider,
 } from "./test-fixtures.js";
+
+const istanbulTrip = roundTrip({
+  id: "istanbul",
+  destination: SAW,
+  outbound: ["2026-12-27T09:00+01:00", "2026-12-27T12:00+03:00"],
+  inbound: ["2027-01-02T13:00+03:00", "2027-01-02T14:00+01:00"],
+  amountMinor: 7900,
+});
 
 const romeTrip = roundTrip({
   id: "rome",
@@ -191,5 +200,88 @@ describe("runFlightSearch", () => {
       rejectedNights: 1,
       destinations: 1,
     });
+  });
+});
+
+describe("transport behaviour with no accommodation provider", () => {
+  /** What transport alone produced, before any accommodation stage ran. */
+  async function transportOnly(overrides: Record<string, unknown> = {}) {
+    return exploreFlights(
+      request(overrides),
+      {
+        flightProvider: stubFlightProvider(searchResult([romeTrip, istanbulTrip])),
+        cities: cityRepository,
+        geography: fixtureGeography,
+        airports: fixtureAirports,
+      },
+      { currency: "EUR", now: fixedClock() },
+    );
+  }
+
+  async function traced(overrides: Record<string, unknown> = {}) {
+    return runFlightSearch(
+      request(overrides),
+      {
+        flightProvider: stubFlightProvider(searchResult([romeTrip, istanbulTrip])),
+        cities: cityRepository,
+        geography: fixtureGeography,
+        airports: fixtureAirports,
+      },
+      { currency: "EUR", now: fixedClock(), newSearchId: () => "search-r" },
+    );
+  }
+
+  const flat = (destinations: readonly { candidates: readonly RankedCandidate[] }[]) =>
+    destinations.flatMap((destination) => destination.candidates);
+
+  it("leaves the candidates and their order exactly as transport found them", async () => {
+    const before = flat((await transportOnly()).destinations);
+    const after = flat((await traced()).destinations);
+    expect(after.map((entry) => entry.candidate.id)).toEqual(
+      before.map((entry) => entry.candidate.id),
+    );
+  });
+
+  it("leaves transport costs and per-person shares untouched", async () => {
+    const before = flat((await transportOnly()).destinations);
+    const after = flat((await traced()).destinations);
+    expect(after.map((entry) => entry.summary.cost.total)).toEqual(
+      before.map((entry) => entry.summary.cost.total),
+    );
+    expect(after.map((entry) => entry.summary.cost.perPersonShares)).toEqual(
+      before.map((entry) => entry.summary.cost.perPersonShares),
+    );
+    expect(after.map((entry) => entry.summary.cost.fares)).toEqual(
+      before.map((entry) => entry.summary.cost.fares),
+    );
+  });
+
+  it("leaves transport provenance untouched", async () => {
+    const before = flat((await transportOnly()).destinations);
+    const after = flat((await traced()).destinations);
+    expect(after.map((entry) => entry.summary.provenance)).toEqual(
+      before.map((entry) => entry.summary.provenance),
+    );
+  });
+
+  it("adds no accommodation amount to any total", async () => {
+    const after = flat((await traced()).destinations);
+    expect(after.every((entry) => entry.summary.cost.accommodation.amountMinor === 0)).toBe(true);
+    expect(
+      after.every((entry) => entry.summary.cost.total.amountMinor === entry.summary.cost.transport.amountMinor),
+    ).toBe(true);
+  });
+
+  it("makes no accommodation provider call", async () => {
+    const result = await traced();
+    expect(result.accommodation?.queriesMade).toBe(0);
+    expect(result.accommodation?.queriesPlanned).toBe(0);
+    expect(result.accommodation?.budget.usedProviderCalls).toBe(0);
+    expect(result.accommodation?.failures).toEqual([]);
+  });
+
+  it("presents nothing as a complete trip cost", async () => {
+    const after = flat((await traced()).destinations);
+    expect(after.every((entry) => entry.summary.cost.scope !== "complete")).toBe(true);
   });
 });
