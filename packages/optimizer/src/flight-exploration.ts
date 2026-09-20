@@ -24,6 +24,7 @@ import {
   type TripSummary,
 } from "@travel-optimizer/domain";
 
+import { deriveStayIntervals, type StayInterval } from "./accommodation-stays.js";
 import type { SkippedQuery } from "./budget.js";
 import type { DiscoveryFunnel } from "./discovery.js";
 import type { ReachSource } from "./return-pool.js";
@@ -72,6 +73,8 @@ export interface RankedCandidate {
   readonly nights: number;
   /** Nights per stay, in visit order; one entry for a round trip (spec §9). */
   readonly nightsByStay: readonly number[];
+  /** Where this trip needs a bed, before anything has been searched. */
+  readonly stayIntervals: readonly StayInterval[];
 }
 
 export interface DestinationResult {
@@ -247,6 +250,8 @@ export interface CandidateAttempt {
   readonly nights: number;
   /** Nights per stay, in visit order (spec §9). */
   readonly nightsByStay: readonly number[];
+  /** Where this trip needs a bed (ADR 0016). */
+  readonly stayIntervals: readonly StayInterval[];
   /** Airports the traveler visits, in order: one for a round trip, two for an open jaw. */
   readonly destinationAirports: readonly Location[];
 }
@@ -696,6 +701,11 @@ export function assembleCandidate(input: AssembleCandidateInput): AttemptOutcome
       summary: summarized.summary,
       nights: evaluation.nights,
       nightsByStay: evaluation.nightsByStay,
+      stayIntervals: deriveStayIntervals(
+        access.stays,
+        evaluation.nightsByStay,
+        context.cities,
+      ),
       destinationAirports: visitedAirports(legs),
     },
   };
@@ -768,6 +778,7 @@ export function groupByDestination(
       summary: attempt.summary,
       nights: attempt.nights,
       nightsByStay: attempt.nightsByStay,
+      stayIntervals: attempt.stayIntervals,
     });
   }
 
