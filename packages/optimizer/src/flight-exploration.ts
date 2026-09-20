@@ -717,16 +717,38 @@ export function assembleCandidate(input: AssembleCandidateInput): AttemptOutcome
   };
 }
 
-/** 0 for a complete amount, 1 for one that excludes an unpriced sector. */
-function comparisonClass(candidate: RankedCandidate): number {
-  return candidate.summary.cost.exclusions.includes("unpriced_segment") ? 1 : 0;
+/**
+ * Which amounts may be compared with which.
+ *
+ * ```text
+ * 0  complete                  transport and accommodation both fully priced
+ * 1  accommodation incomplete  a stay is unpriced, unresolved or not searched
+ * 2  unpriced transport sector a leg of the journey has no price
+ * ```
+ *
+ * `not_searched` and `unpriced` share class 1 because in neither case do we
+ * hold the price; their states and reasons carry the difference (ADR 0016 §8).
+ */
+export function comparisonClass(candidate: RankedCandidate): number {
+  const { exclusions } = candidate.summary.cost;
+  if (exclusions.includes("unpriced_segment")) return 2;
+  if (
+    exclusions.includes("accommodation") ||
+    exclusions.includes("unresolved_accommodation")
+  ) {
+    return 1;
+  }
+  return 0;
 }
 
 /**
  * Orders candidates, completely priced ones first.
  *
- * A known cost that excludes a sector is never compared against a full total:
- * doing so would reward an itinerary for the part it leaves out (ADR 0014).
+ * A cheaper known cost never outranks a fuller one: doing so would reward an
+ * itinerary for what it leaves out (ADR 0014, ADR 0016 §8). Missing
+ * accommodation is never zero, never estimated and never a penalty — it simply
+ * puts the candidate in a class of its own, and `cost.total` already sums
+ * priced components only.
  */
 export function compareCandidates(a: RankedCandidate, b: RankedCandidate): number {
   const byClass = comparisonClass(a) - comparisonClass(b);

@@ -9,11 +9,17 @@ import {
 } from "@travel-optimizer/domain";
 import { describe, expect, it } from "vitest";
 
-import { searchAccommodation, stayQueryKey } from "./accommodation-search.js";
+import {
+  applyAccommodation,
+  searchAccommodation,
+  stayQueryKey,
+} from "./accommodation-search.js";
 import { createAccommodationBudget, createSearchBudget, spend } from "./budget.js";
 import { DEFAULT_CONNECTION_RULES } from "./connection-rules.js";
 import {
   assembleCandidate,
+  compareCandidates,
+  comparisonClass,
   type CandidateContext,
   type RankedCandidate,
 } from "./flight-exploration.js";
@@ -349,5 +355,156 @@ describe("provenance", () => {
       sourceType: "cached",
       fetchedAt: parseUtcInstant("2026-09-18T09:00:00Z"),
     });
+  });
+});
+
+describe("attaching coverage and ranking", () => {
+  const priced = (candidate: RankedCandidate, amountMinor: number) => {
+    const entries = candidate.stayIntervals.map((interval) => ({
+      state: "priced" as const,
+      city: interval.cities[0],
+      checkIn: interval.checkIn,
+      checkOut: interval.checkOut,
+      nights: interval.nights,
+      stay: stayFor(
+        {
+          city: interval.cities[0],
+          checkIn: interval.checkIn,
+          checkOut: interval.checkOut,
+          guests: 2,
+          rooms: 1,
+          currency: "EUR",
+        },
+        amountMinor,
+      ),
+    }));
+    const result = applyAccommodation(candidate, entries);
+    if (!result.ok) throw new Error(result.issues.map((issue) => issue.code).join(", "));
+    return result.candidate;
+  };
+
+  const unsearched = (candidate: RankedCandidate) => {
+    const result = applyAccommodation(
+      candidate,
+      candidate.stayIntervals.map((interval) => ({
+        state: "not_searched" as const,
+        reason: "no_provider" as const,
+        city: interval.cities[0],
+        checkIn: interval.checkIn,
+        checkOut: interval.checkOut,
+        nights: interval.nights,
+      })),
+    );
+    if (!result.ok) throw new Error(result.issues.map((issue) => issue.code).join(", "));
+    return result.candidate;
+  };
+
+  it("writes coverage and its priced stays together", () => {
+    const complete = priced(rome, 30000);
+    expect(complete.summary.cost.accommodation).toEqual({ amountMinor: 30000, currency: "EUR" });
+    expect(complete.summary.cost.exclusions).toEqual([]);
+    expect(comparisonClass(complete)).toBe(0);
+  });
+
+  it("puts a complete trip ahead of a cheaper one with an unpriced stay", () => {
+    const complete = priced(rome, 30000);
+    const incomplete = unsearched(romeAgain);
+    expect(incomplete.summary.cost.total.amountMinor).toBeLessThan(
+      complete.summary.cost.total.amountMinor,
+    );
+    // Cheaper, and still second: its number is not a total.
+    expect([complete, incomplete].sort(compareCandidates).map((c) => c.candidate.id)).toEqual([
+      "rome",
+      "rome-again",
+    ]);
+    expect([incomplete, complete].sort(compareCandidates).map((c) => c.candidate.id)).toEqual([
+      "rome",
+      "rome-again",
+    ]);
+  });
+
+  it("holds for a searched-but-empty stay as much as an unsearched one", async () => {
+    const complete = priced(rome, 30000);
+    const empty = await searchAccommodation([romeAgain], {
+      ...base,
+      budget: budgetOf(10),
+      provider: provider(() => []),
+    });
+    const attached = applyAccommodation(
+      romeAgain,
+      empty.byCandidate.get("rome-again") ?? [],
+    );
+    if (!attached.ok) throw new Error("expected a candidate");
+    expect(comparisonClass(attached.candidate)).toBe(1);
+    expect([attached.candidate, complete].sort(compareCandidates)[0]?.candidate.id).toBe("rome");
+  });
+
+  it("orders two incomplete candidates by what is known", () => {
+    const cheap = unsearched(rome);
+    const dear = unsearched(viaMilan);
+    expect(comparisonClass(cheap)).toBe(comparisonClass(dear));
+    const ordered = [dear, cheap].sort(compareCandidates).map((c) => c.candidate.id);
+    expect(ordered[0]).toBe("rome");
+  });
+
+  it("leaves every candidate in one class when no provider exists", async () => {
+    const result = await searchAccommodation([rome, viaMilan], { ...base, budget: budgetOf(10) });
+    const attached = [rome, viaMilan].map((entry) => {
+      const applied = applyAccommodation(entry, result.byCandidate.get(entry.candidate.id) ?? []);
+      if (!applied.ok) throw new Error("expected a candidate");
+      return applied.candidate;
+    });
+    // All class 1 together, so their order is exactly the transport order.
+    expect(attached.map(comparisonClass)).toEqual([1, 1]);
+    expect(attached.every((entry) => entry.summary.cost.accommodation.amountMinor === 0)).toBe(
+      true,
+    );
+  });
+
+  it("lets an accommodation price reorder the complete class", () => {
+    // Rome's flights are cheaper, but its bed is dearer.
+    const dearBed = priced(rome, 90000);
+    const cheapBed = priced(viaMilan, 10000);
+    expect(
+      [dearBed, cheapBed].sort(compareCandidates).map((entry) => entry.candidate.id)[0],
+    ).toBe("via-milan");
+  });
+
+  it("keeps an unresolved trip below both, and adds no amount", () => {
+    const result = applyAccommodation(
+      openJaw,
+      openJaw.stayIntervals.map((interval) => ({
+        state: "unresolved" as const,
+        reason: "unresolved_open_jaw_split" as const,
+        cities: [...interval.cities],
+        checkIn: interval.checkIn,
+        checkOut: interval.checkOut,
+        nights: interval.nights,
+      })),
+    );
+    if (!result.ok) throw new Error("expected a candidate");
+    expect(comparisonClass(result.candidate)).toBe(2);
+    expect(result.candidate.summary.cost.accommodation.amountMinor).toBe(0);
+    expect(result.candidate.summary.cost.exclusions).toContain("unresolved_accommodation");
+  });
+
+  it("keeps the two views of a priced stay in step", () => {
+    // The dual write is the trap: coverage and priced stays are two views of
+    // one fact, and the domain rejects a trip where they disagree. Deriving
+    // both from the same entries is what makes disagreement impossible.
+    const complete = priced(viaMilan, 20000);
+    expect(complete.candidate.stays.map((stay) => stay.id)).toEqual(
+      complete.candidate.accommodation.flatMap((entry) =>
+        entry.state === "priced" ? [entry.stay.id] : [],
+      ),
+    );
+    // And it summarizes cleanly rather than vanishing as invalid.
+    expect(complete.summary.cost.accommodation.amountMinor).toBe(40000);
+  });
+
+  it("carries no priced stay for coverage that has none", () => {
+    const incomplete = unsearched(viaMilan);
+    expect(incomplete.candidate.stays).toEqual([]);
+    expect(incomplete.candidate.accommodation).toHaveLength(2);
   });
 });

@@ -1,11 +1,14 @@
 import {
+  summarizeTrip,
   type AccommodationProvider,
   type AccommodationStay,
   type CurrencyCode,
   type ProviderCallMetrics,
   type ProviderFailure,
+  type DomainIssue,
   type Stay,
   type StaySearchQuery,
+  type TripCandidate,
 } from "@travel-optimizer/domain";
 
 import type { StayInterval } from "./accommodation-stays.js";
@@ -246,4 +249,38 @@ export async function searchAccommodation(
   }
 
   return { byCandidate, queriesPlanned: queries.size, queriesMade, failures, metrics };
+}
+
+export type ApplyAccommodationResult =
+  | { readonly ok: true; readonly candidate: RankedCandidate }
+  | { readonly ok: false; readonly issues: readonly DomainIssue[] };
+
+/**
+ * Puts coverage back on a candidate and recomputes its cost.
+ *
+ * Priced coverage is written to **both** `accommodation` and `stays` in one
+ * step. They are two views of one fact, and the domain rejects a trip where
+ * they disagree — so writing only one would make a correctly priced candidate
+ * invalid, and it would vanish rather than complain.
+ *
+ * A candidate that cannot be re-summarized is returned as issues, never
+ * silently dropped: a bad accommodation result must not delete a transport
+ * itinerary that was perfectly good.
+ */
+export function applyAccommodation(
+  candidate: RankedCandidate,
+  entries: readonly AccommodationStay[],
+): ApplyAccommodationResult {
+  const priced = entries.flatMap((entry) => (entry.state === "priced" ? [entry.stay] : []));
+  const trip: TripCandidate = {
+    ...candidate.candidate,
+    stays: priced,
+    accommodation: [...entries],
+  };
+  const summarized = summarizeTrip(trip);
+  if (!summarized.ok) return { ok: false, issues: summarized.issues };
+  return {
+    ok: true,
+    candidate: { ...candidate, candidate: trip, summary: summarized.summary },
+  };
 }
