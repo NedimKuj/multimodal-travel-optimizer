@@ -5,9 +5,14 @@ without a UI (`docs/implementation-plan.md` §51).
 
 It searches **flights**, plus the ground transfers needed to reach them. With
 `--open-jaw` it composes itineraries that fly home from another city, and with
-`--multi-city` itineraries that stop in a second city on the way. No
-accommodation, no trains or buses. Fares are **cached** and not guaranteed
-bookable; transfer costs are **estimates from a distance model**, never quotes.
+`--multi-city` itineraries that stop in a second city on the way. No trains or
+buses. Fares are **cached** and not guaranteed bookable; transfer costs are
+**estimates from a distance model**, never quotes.
+
+**No accommodation is priced.** No licensed accommodation provider is available
+(`docs/provider-compliance.md`), so every stay is reported as *not searched*
+with the reason. That is a true statement about the trip rather than a gap in
+the output: a six-night stay needs a bed whether or not we can price one.
 
 ## Prerequisites
 
@@ -112,8 +117,27 @@ Candidates: 5 across 3 destination(s)
   fare whose connection cannot be made is rejected and counted, not shown.
 - **"no provider expiry (freshness unknown)"** means this API supplied no
   expiry, not that the price lasts forever (ADR 0006).
-- **"transport only"** means flights and their transfers, but no
-  accommodation, so it is not yet a complete-trip cost.
+- **"known cost"** means the amount covers only what is priced. The label
+  beside it says what it leaves out, and each stay says what is known about it:
+
+  ```text
+  127.00 EUR / person · 254.00 EUR known cost · excludes some accommodation
+  Accommodation Belgrade: not searched — 5 nights · no accommodation provider
+  The amount above EXCLUDES accommodation that is not priced
+  ```
+
+  A stay reads **priced**, **not searched**, **unpriced** or **unresolved**.
+  They are different facts, and the reason keeps them apart — a provider that
+  answered with nothing is not the same as one we could not reach, and neither
+  is the same as never having asked (ADR 0016).
+- **An open jaw's accommodation is unresolved.** Flying into one city and home
+  from another, with an unpriced sector between them, leaves no way to know how
+  many nights belong to each. The optimizer does not guess, split evenly, or
+  attribute the whole stay to one city. It says the allocation is undeterminable
+  and prices none of it.
+- **A complete trip outranks a cheaper incomplete one.** Candidates are ordered
+  by what their amount covers before they are ordered by the amount, so a
+  cheaper known cost never beats a fuller one.
 - **Nights are per city** on a multi-city trip, and a night spent crossing
   between two cities belongs to neither, so the per-city nights can sum to less
   than the days away.
@@ -184,6 +208,35 @@ two guaranteed ways home and nothing else.
 
 The 12 is an application-level safety limit of our own, not the provider's
 quota, which remains unverified (`docs/provider-compliance.md`).
+
+## Accommodation
+
+Nothing is priced, and the search says so per stay rather than staying silent:
+
+```text
+1. Milan → Belgrade (multi-city) — BGY, BEG
+   215.72 EUR / person · 431.44 EUR known cost · excludes some accommodation
+   Accommodation Milan: not searched — 5 nights · no accommodation provider
+   Accommodation Belgrade: not searched — 2 nights · no accommodation provider
+   The amount above EXCLUDES accommodation that is not priced
+```
+
+Stay dates come from the itinerary itself, not from the requested dates: a stay
+begins when the traveler *reaches the city*, so a ride in from a distant airport
+delays it, and ends when they leave for their next departure. A night spent
+crossing between two cities belongs to neither and is never booked.
+
+When a provider is licensed, only a **finalist shortlist** is priced — pricing
+every candidate would be prohibitive. The shortlist takes the cheapest
+candidates by transport cost but reserves one slot for each trip shape first, so
+a slightly dearer multi-city trip is not crowded out by a run of near-identical
+round trips. Identical searches are asked once: five candidates wanting the same
+city, dates and party cost one query, not five.
+
+Accommodation has its own provider budget, entirely separate from the 12
+transport calls. Candidates whose transport cost already excludes a sector get
+no accommodation call at all — they are already incomplete in a way that would
+make the comparison misleading — and are kept as secondary results.
 
 ## Caching
 
