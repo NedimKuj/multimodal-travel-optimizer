@@ -10,8 +10,8 @@ import type { DestinationResult, RankedCandidate, SearchTrace } from "@travel-op
 /*
  * Human-readable output for trip-search.
  *
- * Phase 1 shows transport only, and says so: nothing here may read as a
- * complete-trip cost or as a guaranteed bookable price.
+ * Transport only, and it says so: nothing here may read as a complete-trip
+ * cost or as a guaranteed bookable price.
  */
 
 export function formatMoney(money: Money): string {
@@ -231,9 +231,23 @@ export function formatSearch(trace: SearchTrace, options: FormatOptions): string
     `Provider calls: ${String(metrics?.requestCount ?? 0)} (cache ${metrics?.cache ?? "n/a"}) · fares returned: ${String(counts.offersReturned)}`,
   );
   if (trace.discovery !== undefined) {
+    const { funnel } = trace.discovery;
     const withReturns = trace.discovery.enriched.filter(
       (entry) => entry.returnOffersFound > 0,
     ).length;
+    // The funnel, in the order a search walks it, so a thin result points at
+    // the step that thinned it.
+    lines.push(
+      `Destinations found: ${String(funnel.destinationsDiscovered)}` +
+        ` · shortlisted ${String(funnel.destinationsAdmitted)}` +
+        (funnel.onwardQueriesExecuted > 0
+          ? ` · onward queries ${String(funnel.onwardQueriesExecuted)}` +
+            // Airports here, cities on the line below: an onward leg reaches
+            // an airport, and several may serve one city.
+            ` · second-city airports found ${String(funnel.secondCityAirportsDiscovered)}` +
+            ` (${String(funnel.secondCityAirportsAdmitted)} admitted)`
+          : ""),
+    );
     // This line is about ways home, so it counts only the queries that would
     // have found one. Onward queries are reported on their own line below.
     const returnSkips = trace.discovery.skipped.filter((entry) => entry.stage === "return");
@@ -284,6 +298,14 @@ export function formatSearch(trace: SearchTrace, options: FormatOptions): string
         (entry) =>
           `${String(entry.count)} ${entry.stage === "return" ? "way home" : "onward leg"} quer${entry.count === 1 ? "y" : "ies"}`,
       );
+    if (funnel.returnQueriesFromSecondCity > 0) {
+      lines.push(
+        `Ways home queried: ${String(funnel.returnQueriesFromStageOne)} from destinations` +
+          ` (${String(funnel.returnFaresFoundFromStageOne)} with fares)` +
+          ` · ${String(funnel.returnQueriesFromSecondCity)} from second cities` +
+          ` (${String(funnel.returnFaresFoundFromSecondCity)} with fares)`,
+      );
+    }
     lines.push(
       `Calls planned: ${String(trace.discovery.callsPlanned)} of ${String(trace.discovery.callBudget)} budget` +
         (hungry.length > 0 ? ` · budget-limited: ${hungry.join(", ")} not made` : ""),
@@ -310,7 +332,10 @@ export function formatSearch(trace: SearchTrace, options: FormatOptions): string
   ].filter((entry) => entry !== "");
   if (rejected.length > 0) lines.push(`Filtered out: ${rejected.join(" · ")}`);
   lines.push(
-    `Candidates: ${String(counts.candidatesBuilt)} across ${String(counts.destinations)} destination(s)`,
+    `Candidates: ${String(counts.candidatesBuilt)} across ${String(counts.destinations)} destination(s)` +
+      (counts.multiCityCandidatesBuilt > 0
+        ? ` · ${String(counts.multiCityCandidatesBuilt)} multi-city`
+        : ""),
   );
   lines.push("");
 

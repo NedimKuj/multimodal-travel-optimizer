@@ -902,3 +902,115 @@ describe("discoverOneWayLegs — one account per airport", () => {
     });
   });
 });
+
+describe("discoverOneWayLegs — funnel accounting", () => {
+  const onwardFrom = (from: typeof CIA, to: typeof CIA, id: string, minor: number) => {
+    const leg = segment({
+      id,
+      origin: from,
+      destination: to,
+      departure: `2026-12-30T10:00${ARRIVAL_OFFSET[from.id] ?? "+01:00"}`,
+      arrival: `2026-12-30T16:15${ARRIVAL_OFFSET[to.id] ?? "+01:00"}`,
+    });
+    return { segments: [leg], offers: [offer(`${id}-fare`, [leg.id], minor)] };
+  };
+
+  async function run(overrides: Record<string, unknown> = {}) {
+    return discoverOneWayLegs(
+      stagedProvider(
+        result([
+          oneWay("to-cia", CIA, 2000),
+          oneWay("to-fco", FCO, 2100),
+          oneWay("to-saw", SAW, 9000),
+        ]),
+        { CIA: result([homeward("cia-home", CIA, 3000)]) },
+        [],
+        { CIA: result([onwardFrom(CIA, MXP, "cia-mxp", 500)]) },
+      ),
+      {
+        window,
+        currency: "EUR",
+        travelers: 2,
+        origins,
+        cities: cityRepository,
+        callBudget: 20,
+        multiCity: true,
+        ...overrides,
+      },
+    );
+  }
+
+  it("counts what stage 1 found and what it admitted", async () => {
+    const { funnel } = await run({ maxEnrichedDestinations: 2 });
+    expect(funnel.destinationsDiscovered).toBe(3);
+    expect(funnel.destinationsAdmitted).toBe(2);
+    expect(funnel.destinationsAdmitted).toBeLessThanOrEqual(funnel.destinationsDiscovered);
+  });
+
+  it("counts onward queries made and the second cities they reached", async () => {
+    const { funnel } = await run();
+    expect(funnel.onwardQueriesExecuted).toBeGreaterThan(0);
+    expect(funnel.secondCityAirportsDiscovered).toBe(1);
+    expect(funnel.secondCityAirportsAdmitted).toBeLessThanOrEqual(
+      funnel.secondCityAirportsDiscovered,
+    );
+  });
+
+  it("never admits more second cities than it discovered", async () => {
+    const { funnel } = await run({ maxOnwardLegsPerAirport: 0 });
+    expect(funnel.secondCityAirportsAdmitted).toBe(0);
+    expect(funnel.secondCityAirportsDiscovered).toBe(1);
+  });
+
+  it("splits way-home queries and fares by how the place was found", async () => {
+    const discovery = await run();
+    const { funnel } = discovery;
+    expect(funnel.returnQueriesFromStageOne + funnel.returnQueriesFromSecondCity).toBe(
+      discovery.enriched.length,
+    );
+    expect(funnel.returnFaresFoundFromStageOne).toBeLessThanOrEqual(
+      funnel.returnQueriesFromStageOne,
+    );
+    expect(funnel.returnFaresFoundFromSecondCity).toBeLessThanOrEqual(
+      funnel.returnQueriesFromSecondCity,
+    );
+    // Rome is the only place with a way home in this fixture.
+    expect(funnel.returnFaresFoundFromStageOne).toBe(1);
+  });
+
+  it("gives every place exactly one account: queried or not, never both", async () => {
+    const discovery = await run({ maxEnrichedDestinations: 2 });
+    const queried = discovery.enriched.map((entry) => entry.airport.id);
+    const notQueried = discovery.skipped.map((entry) => entry.airport.id);
+    const all = [...queried, ...notQueried];
+    expect(new Set(all).size).toBe(all.length);
+    expect(queried.filter((id) => notQueried.includes(id))).toEqual([]);
+  });
+
+  it("holds that account when the budget cuts the run short", async () => {
+    const discovery = await run({ callBudget: 3, maxEnrichedDestinations: 2 });
+    const queried = discovery.enriched.map((entry) => entry.airport.id);
+    const notQueried = discovery.skipped
+      .filter((entry) => entry.stage === "return")
+      .map((entry) => entry.airport.id);
+    const all = [...queried, ...notQueried];
+    expect(new Set(all).size).toBe(all.length);
+    expect(discovery.funnel.returnQueriesFromStageOne).toBe(queried.length);
+  });
+
+  it("counts nothing when the outbound call fails", async () => {
+    const discovery = await discoverOneWayLegs(
+      stagedProvider(
+        failedResult("fixture-flights", [{ kind: "unauthorized", message: "no", retryable: false }], metrics),
+        {},
+      ),
+      { window, currency: "EUR", travelers: 2, origins, cities: cityRepository },
+    );
+    expect(discovery.funnel).toMatchObject({
+      destinationsDiscovered: 0,
+      destinationsAdmitted: 0,
+      onwardQueriesExecuted: 0,
+      returnQueriesFromStageOne: 0,
+    });
+  });
+});

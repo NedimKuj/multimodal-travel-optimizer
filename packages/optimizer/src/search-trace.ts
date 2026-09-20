@@ -131,7 +131,7 @@ export interface RunSearchOptions {
 }
 
 /**
- * Runs Phase 1 exploration and wraps it in a trace.
+ * Runs a search and wraps it in a trace.
  *
  * Stages listed are the ones this phase actually performs; ground transport,
  * open jaw and accommodation are absent rather than reported as empty.

@@ -438,9 +438,9 @@ VIE → PRG
 PRG → SJJ
 ```
 
-Multi-city composition is **Phase 3b**: it lands after composed round trips and
-open jaw prove the discovery funnel, call-budget accounting, gap semantics and
-ranking (`docs/implementation-plan.md` §48).
+Multi-city composition landed in **Phase 3b**, after composed round trips and
+open jaw proved the discovery funnel, call-budget accounting, gap semantics and
+ranking (`docs/implementation-plan.md`).
 
 Multi-city candidates are valid when:
 
@@ -1001,6 +1001,36 @@ Return: PRG → SJJ
 ```
 
 The optimizer should retain enough metadata to explain why a candidate exists and how its total was calculated.
+
+### Funnel accounting
+
+A search must also explain the candidates that did **not** become results. Every
+place a search considers passes through one pipeline, and is counted once at
+each step it reaches:
+
+```text
+discovered → admitted → queried → fare found
+          → assembled → rejected by constraint → final
+```
+
+The counts are attributable to the stage and source that produced them:
+destinations stage 1 found and shortlisted; onward queries made; second-city
+airports found and admitted to the return pool; way-home queries and the fares
+they found, split by whether the place came from stage 1 or from onward
+discovery; candidates assembled, including how many have three or more legs;
+and each rejection reason separately — nights, temporal ordering, budget,
+feasibility, stay length and implausible gaps.
+
+Two invariants hold, and are tested:
+
+- **No place is counted twice.** A place is queried or not queried, never both,
+  and never reported under two reasons for not being queried.
+- **No step exceeds the one before it.** Admitted never exceeds discovered,
+  fares found never exceeds queries made.
+
+A thin result must therefore point at the step that thinned it, rather than
+leaving the user to guess whether the cause was the budget, the data or a
+constraint.
 
 ---
 

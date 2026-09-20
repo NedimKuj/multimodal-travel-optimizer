@@ -42,7 +42,7 @@ export type ParseArgumentsResult =
   | { readonly ok: false; readonly issues: readonly DomainIssue[] }
   | { readonly ok: false; readonly help: true };
 
-export const HELP_TEXT = `trip-search — explore flights for a trip (Phase 1: flights only)
+export const HELP_TEXT = `trip-search — explore flights for a trip (flights only; no trains, buses or accommodation)
 
 Usage:
   pnpm trip-search --origin SJJ --from 2026-12-26 --to 2027-01-03 \\

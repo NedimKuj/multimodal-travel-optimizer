@@ -134,11 +134,15 @@ export function composeItineraries(input: ComposeInput): CompositionResult {
     rejectedStayTooShort: 0,
     secondCitiesReached: 0,
     secondCitiesWithoutReturn: 0,
+    multiCityCandidatesBuilt: 0,
   };
 
-  const record = (outcome: ReturnType<typeof assembleCandidate>): void => {
+  const record = (outcome: ReturnType<typeof assembleCandidate>, pricedLegs: number): void => {
     if (outcome.ok) {
       attempts.push(outcome.attempt);
+      if (pricedLegs >= 3) {
+        counts.multiCityCandidatesBuilt = (counts.multiCityCandidatesBuilt ?? 0) + 1;
+      }
       return;
     }
     counts[outcome.counter] = (counts[outcome.counter] ?? 0) + 1;
@@ -178,6 +182,7 @@ export function composeItineraries(input: ComposeInput): CompositionResult {
               maxUnpricedGapKm: config.maxUnpricedGapKm,
               stayRules: { minNightsPerStay: config.minNightsPerCity },
             }),
+            2,
           );
         }
       }
@@ -207,6 +212,7 @@ export function composeItineraries(input: ComposeInput): CompositionResult {
                 maxUnpricedGapKm: config.maxUnpricedGapKm,
                 stayRules: { minNightsPerStay: config.minNightsPerCity },
               }),
+              3,
             );
           }
         }

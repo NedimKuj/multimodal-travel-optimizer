@@ -68,10 +68,10 @@ function toSearchRequestInput(options: CliOptions): Record<string, unknown> {
     }),
     travelers: options.travelers,
     ...(options.budget !== undefined && { budget: options.budget }),
-    // Phase 1 is flights only; other modes arrive with the transport graph.
+    // Flights only: no rail or bus source is licence-cleared
+    // (docs/provider-compliance.md).
     transportModes: ["flight"],
     allowOpenJaw: options.openJaw,
-    // Multi-city is Phase 3b.
     allowMultiCity: options.multiCity,
     alternativeAirports: options.alternativeAirports,
   };

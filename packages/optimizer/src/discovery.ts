@@ -74,6 +74,45 @@ export interface OnwardRecord {
   readonly onwardOffersFound: number;
 }
 
+/**
+ * Where a search's candidates went, stage by stage (spec §25).
+ *
+ * Every place is counted once and in one place. A candidate is discovered,
+ * then admitted or capped, then queried or skipped, and a query either finds
+ * fares or does not — so a thin result can be traced to the step that thinned
+ * it rather than guessed at.
+ */
+export interface DiscoveryFunnel {
+  /** Destinations stage 1 found a fare to. */
+  readonly destinationsDiscovered: number;
+  /** Of those, the ones inside the shortlist cap and so eligible for a query. */
+  readonly destinationsAdmitted: number;
+  /** Onward queries actually made, each from one admitted destination. */
+  readonly onwardQueriesExecuted: number;
+  /** Airports onward legs reached, before the cheapest-per-airport cap. */
+  readonly secondCityAirportsDiscovered: number;
+  /** Of those, the ones admitted to the return pool (ADR 0015 §7). */
+  readonly secondCityAirportsAdmitted: number;
+  /** Way-home queries made, split by how the place was found. */
+  readonly returnQueriesFromStageOne: number;
+  readonly returnQueriesFromSecondCity: number;
+  /** Of those, the ones that came back with at least one fare. */
+  readonly returnFaresFoundFromStageOne: number;
+  readonly returnFaresFoundFromSecondCity: number;
+}
+
+const EMPTY_FUNNEL: DiscoveryFunnel = {
+  destinationsDiscovered: 0,
+  destinationsAdmitted: 0,
+  onwardQueriesExecuted: 0,
+  secondCityAirportsDiscovered: 0,
+  secondCityAirportsAdmitted: 0,
+  returnQueriesFromStageOne: 0,
+  returnQueriesFromSecondCity: 0,
+  returnFaresFoundFromStageOne: 0,
+  returnFaresFoundFromSecondCity: 0,
+};
+
 export interface DiscoveryResult {
   readonly outboundSegments: readonly TransportSegment[];
   readonly outboundOffers: readonly TransportOffer[];
@@ -90,6 +129,7 @@ export interface DiscoveryResult {
   readonly enriched: readonly EnrichmentRecord[];
   readonly onward: readonly OnwardRecord[];
   readonly skipped: readonly SkippedDestination[];
+  readonly funnel: DiscoveryFunnel;
   readonly failures: readonly ProviderFailure[];
   readonly metrics: readonly ProviderCallMetrics[];
   /** Provider calls this search planned, against the budget. */
@@ -198,6 +238,7 @@ export async function discoverOneWayLegs(
       enriched: [],
       onward: [],
       skipped: [],
+      funnel: EMPTY_FUNNEL,
       failures,
       metrics,
       callsPlanned: budget.usedProviderCalls,
@@ -221,6 +262,10 @@ export async function discoverOneWayLegs(
   const onward: OnwardRecord[] = [];
   const skipped: SkippedDestination[] = [];
   const pool = createReturnPool();
+  // Airports onward legs reached, and the subset that entered the pool. Sets,
+  // so an airport two onward queries both reach is still one airport.
+  const secondCityAirportsSeen = new Set<string>();
+  const secondCityAirportsAdmitted = new Set<string>();
 
   const returnCallCost = costOfQuery(options.window.return);
   // An onward leg may depart any time the traveler is away, so it is priced
@@ -329,12 +374,14 @@ export async function discoverOneWayLegs(
     // ranked against the stage-1 destinations by what it is already known to
     // cost to get there. Only the legs composition will actually pair are
     // admitted, so a call is never spent on one it would prune (ADR 0015 §7).
-    for (const leg of legsFrom(
-      oneWayLegs(on.data.segments, on.data.offers),
-      candidate.airport.id,
-      maxOnwardLegs,
-    )) {
+    const reached = oneWayLegs(on.data.segments, on.data.offers).filter(
+      (leg) => leg.segment.origin.id === candidate.airport.id,
+    );
+    for (const leg of reached) secondCityAirportsSeen.add(leg.segment.destination.id);
+
+    for (const leg of legsFrom(reached, candidate.airport.id, maxOnwardLegs)) {
       const second = leg.segment.destination;
+      secondCityAirportsAdmitted.add(second.id);
       pool.offer({
         airport: second,
         city: cityFor(second),
@@ -419,6 +466,24 @@ export async function discoverOneWayLegs(
     skip(directCandidate(candidate), "return", "cap");
   }
 
+  const queriedFrom = (source: ReachSource): EnrichmentRecord[] =>
+    enriched.filter((entry) => entry.source === source);
+  const funnel: DiscoveryFunnel = {
+    destinationsDiscovered: ranked.length,
+    destinationsAdmitted: shortlist.length,
+    onwardQueriesExecuted: onward.length,
+    secondCityAirportsDiscovered: secondCityAirportsSeen.size,
+    secondCityAirportsAdmitted: secondCityAirportsAdmitted.size,
+    returnQueriesFromStageOne: queriedFrom("stage_1").length,
+    returnQueriesFromSecondCity: queriedFrom("onward").length,
+    returnFaresFoundFromStageOne: queriedFrom("stage_1").filter(
+      (entry) => entry.returnOffersFound > 0,
+    ).length,
+    returnFaresFoundFromSecondCity: queriedFrom("onward").filter(
+      (entry) => entry.returnOffersFound > 0,
+    ).length,
+  };
+
   return {
     outboundSegments: outbound.data.segments,
     outboundOffers: outbound.data.offers,
@@ -427,6 +492,7 @@ export async function discoverOneWayLegs(
     enriched,
     onward,
     skipped,
+    funnel,
     failures,
     metrics,
     callsPlanned: budget.usedProviderCalls,

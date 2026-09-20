@@ -25,6 +25,7 @@ import {
 } from "@travel-optimizer/domain";
 
 import type { SkippedQuery } from "./budget.js";
+import type { DiscoveryFunnel } from "./discovery.js";
 import type { ReachSource } from "./return-pool.js";
 import {
   DEFAULT_CONNECTION_RULES,
@@ -52,15 +53,16 @@ import {
 } from "./travel-window.js";
 
 /*
- * Phase 1 flight exploration.
+ * Flight exploration from the provider's own round-trip fares.
  *
  * Provider-agnostic: it talks to the FlightProvider port and never knows which
- * provider is behind it. Discovery uses provider round-trip fares only
- * (docs/decisions/0008-phase-1-round-trip-discovery.md); composing two one-way
- * fares belongs to the open-jaw phase.
+ * provider is behind it. Discovery here uses round-trip fares only
+ * (docs/decisions/0008-phase-1-round-trip-discovery.md); composing one-way
+ * fares into round trips, open jaws and multi-city trips is
+ * `composed-search.ts`.
  *
  * Costs here are transport only. They are never a complete-trip cost, because
- * accommodation does not exist until Phase 4.
+ * no accommodation provider is available (docs/implementation-plan.md, Phase 4).
  */
 
 export interface RankedCandidate {
@@ -101,10 +103,12 @@ export interface ExplorationCounts {
   readonly rejectedStayTooShort: number;
   /** Destinations reached but with no retrieved way home. */
   readonly destinationsWithoutReturn: number;
-  /** Second cities an onward leg reached (Phase 3b). */
+  /** Second cities an onward leg reached, as cities not airports (ADR 0010). */
   readonly secondCitiesReached: number;
   /** Second cities reached, but with no retrieved way home from them. */
   readonly secondCitiesWithoutReturn: number;
+  /** Candidates built from three or more priced legs (patterns 3 and 4). */
+  readonly multiCityCandidatesBuilt: number;
   readonly destinations: number;
 }
 
@@ -122,6 +126,8 @@ export interface DiscoveryRecord {
   readonly onward: readonly { readonly airport: Location; readonly onwardOffersFound: number }[];
   /** Queries the search chose not to make, in the shared shape (`budget.ts`). */
   readonly skipped: readonly SkippedQuery[];
+  /** Where candidates went, stage by stage (`discovery.ts`). */
+  readonly funnel: DiscoveryFunnel;
   readonly callsPlanned: number;
   readonly callBudget: number;
 }
@@ -176,6 +182,7 @@ const emptyCounts: ExplorationCounts = {
   destinationsWithoutReturn: 0,
   secondCitiesReached: 0,
   secondCitiesWithoutReturn: 0,
+  multiCityCandidatesBuilt: 0,
   destinations: 0,
 };
 
@@ -226,7 +233,8 @@ function buildQuery(
     origins,
     destinations: request.destination === null ? "anywhere" : [request.destination],
     departureDates: window.departure,
-    // Phase 1 searches round trips only.
+    // This path searches the provider's own round-trip fares (ADR 0008);
+    // composing one-way fares is `composed-search.ts`.
     returnDates: window.return,
     travelers: request.travelers,
     currency,
@@ -504,7 +512,7 @@ function buildCandidate(
   const segments = offer.segmentIds.map((id) => segmentsById.get(id));
   const [outbound, inbound] = segments;
   if (outbound === undefined || inbound === undefined || segments.length !== 2) {
-    // Phase 1 only builds trips from provider round-trip fares.
+    // This path builds trips from provider round-trip fares only.
     return { ok: false, counter: "rejectedNotRoundTrip" };
   }
 
@@ -784,7 +792,7 @@ export function groupByDestination(
 }
 
 /**
- * Runs Phase 1 exploration: query the flight provider for round trips within
+ * Explores the provider's round-trip fares: query them within
  * the resolved travel window, then keep the candidates that satisfy the
  * request, counting every rejection.
  */

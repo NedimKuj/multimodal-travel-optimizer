@@ -2111,9 +2111,9 @@ it.
 
 ---
 
-## Phase 3b — Multi-city
+## Phase 3b — Multi-city — **complete**
 
-Implement, from independently priced one-way fares:
+Implemented, from independently priced one-way fares:
 
 ```text
 SJJ → A → B → SJJ      multi-city, every leg priced        (pattern 3)
@@ -2125,9 +2125,15 @@ C → SJJ                multi-city open jaw, B → C unpriced (pattern 4)
 
 ```text
 Stage 1   one discovery call per departure month (SJJ → anywhere, one-way)
-Stage 2   return-leg queries    (B → SJJ)
+Stage 2   way-home queries      (B → SJJ)
 Stage 3   onward-leg queries    (A → anywhere), only with --multi-city
 ```
+
+Way-home candidates come from **both** stages: the destinations stage 1 found
+and the second cities stage 3 reaches, in one pool ranked by known reach cost
+and keyed by the return airport (`docs/decisions/0015-multi-city-composition.md`
+§7). Querying only stage-1 destinations structurally prevented most multi-city
+itineraries from completing, which live measurement confirmed.
 
 Stages 2 and 3 share what stage 1 leaves: the first **2 return-leg query units**
 are guaranteed, then the allocator alternates `return → onward → return →
@@ -2157,9 +2163,22 @@ Every intermediate city requires at least one night. Nights are counted per
 stay, the total still satisfies `[minNights, maxNights]`, and `stays` stays
 empty — a night we cannot price is not accommodation.
 
-Phase 3b is done when three-leg itineraries are deterministic, budget-bounded,
+Phase 3b is done: three-leg itineraries are deterministic, budget-bounded,
 connection-valid, correctly costed per stay, and a gapped multi-city ranks below
 a complete one.
+
+### Verified 2026-09-20
+
+- Three-leg itineraries compose against live data, with nights reported per city
+  and transfers attached per stay.
+- Second cities receive way-home queries in their own right and return fares.
+- `providerCalls <= 12` holds with `--multi-city`, `--open-jaw` and
+  `--alternative-airports` together, over one-, two- and three-month windows.
+- Every place a search considers has exactly one account: queried, or not
+  queried with a reason — never both.
+
+Coverage remains thin, and the counts say why: most rejections are now nights
+outside the requested range rather than an absent way home.
 
 ---
 

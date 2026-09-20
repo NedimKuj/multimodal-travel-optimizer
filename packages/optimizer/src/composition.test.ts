@@ -542,6 +542,27 @@ describe("multi-city (patterns 3 and 4)", () => {
     expect(result.counts.secondCitiesWithoutReturn).toBe(0);
   });
 
+  it("counts three-leg candidates apart from the rest", async () => {
+    const result = await search();
+    const threeLegCount = threeLeg(result).length;
+    expect(result.counts.multiCityCandidatesBuilt).toBe(threeLegCount);
+    expect(result.counts.multiCityCandidatesBuilt).toBeGreaterThan(0);
+    // A multi-city candidate is still a candidate, never counted twice.
+    expect(result.counts.multiCityCandidatesBuilt).toBeLessThanOrEqual(
+      result.counts.candidatesBuilt,
+    );
+  });
+
+  it("counts no multi-city candidates when none were asked for", async () => {
+    const result = await exploreComposedItineraries(
+      request({ allowMultiCity: false }),
+      deps(viaMilan),
+      options,
+    );
+    expect(result.counts.multiCityCandidatesBuilt).toBe(0);
+    expect(result.counts.candidatesBuilt).toBeGreaterThan(0);
+  });
+
   it("pairs every second city it spent a way-home query on", async () => {
     // Whatever discovery admitted to the return pool, composition must be
     // willing to pair, or a provider call was spent on a leg it then prunes.

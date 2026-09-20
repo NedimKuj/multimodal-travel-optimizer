@@ -20,7 +20,7 @@ import { expandOrigins } from "./origin-expansion.js";
 import { resolveTravelWindow } from "./travel-window.js";
 
 /*
- * Phase 3 search: compose itineraries from independently priced one-way fares.
+ * Composing itineraries from independently priced one-way fares.
  *
  * Wider coverage than provider round trips (51 destinations against 15,
  * measured 2026-09-18), and the only way to build an open jaw. The A -> B
@@ -61,6 +61,7 @@ export async function exploreComposedItineraries(
     destinationsWithoutReturn: 0,
     secondCitiesReached: 0,
     secondCitiesWithoutReturn: 0,
+    multiCityCandidatesBuilt: 0,
     destinations: 0,
   };
 
@@ -131,6 +132,7 @@ export async function exploreComposedItineraries(
       airport: entry.airport,
       reason: entry.reason,
     })),
+    funnel: discovery.funnel,
     callsPlanned: discovery.callsPlanned,
     callBudget: discovery.callBudget,
   };
