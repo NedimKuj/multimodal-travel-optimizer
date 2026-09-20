@@ -761,3 +761,99 @@ describe("costScopeFor", () => {
     expect(both).not.toContain("accommodation");
   });
 });
+
+describe("accommodation coverage", () => {
+  /** The coverage entry a priced stay implies. */
+  function pricedEntry(entry: typeof viennaWeek) {
+    return {
+      state: "priced" as const,
+      city: entry.city,
+      checkIn: entry.checkIn,
+      checkOut: entry.checkOut,
+      nights: entry.nights,
+      stay: entry,
+    };
+  }
+
+  it("summarizes a priced stay reported by its coverage entry", () => {
+    // The guard rail for the attach step: writing a priced entry without also
+    // carrying its Stay would make the candidate vanish as invalid rather than
+    // fail loudly, so this pins that a correct pair summarizes cleanly.
+    const priced = trip({
+      id: "priced",
+      segments: [sjjToVie, vieToSjj],
+      offers: [offer({ id: "o", segmentIds: [sjjToVie.id, vieToSjj.id], amountMinor: 15000 })],
+      stays: [viennaWeek],
+      accommodation: [pricedEntry(viennaWeek)],
+    });
+    const result = summarizeTrip(priced);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.summary.cost.accommodation).toEqual(viennaWeek.price);
+    expect(result.summary.cost.exclusions).toEqual([]);
+    expect(result.summary.cost.scope).toBe("complete");
+  });
+
+  it("rejects coverage that claims a stay the trip does not carry", () => {
+    const orphaned = trip({
+      id: "orphaned",
+      segments: [sjjToVie, vieToSjj],
+      offers: [offer({ id: "o", segmentIds: [sjjToVie.id, vieToSjj.id], amountMinor: 15000 })],
+      stays: [],
+      accommodation: [pricedEntry(viennaWeek)],
+    });
+    expect(validateTripCandidate(orphaned).map((entry) => entry.code)).toContain(
+      "ACCOMMODATION_WITHOUT_STAY",
+    );
+  });
+
+  it("rejects a priced stay no coverage entry reports", () => {
+    const unreported = trip({
+      id: "unreported",
+      segments: [sjjToVie, vieToSjj],
+      offers: [offer({ id: "o", segmentIds: [sjjToVie.id, vieToSjj.id], amountMinor: 15000 })],
+      stays: [viennaWeek],
+      accommodation: [
+        {
+          state: "not_searched",
+          reason: "outside_shortlist",
+          city: viennaWeek.city,
+          checkIn: viennaWeek.checkIn,
+          checkOut: viennaWeek.checkOut,
+          nights: viennaWeek.nights,
+        },
+      ],
+    });
+    expect(validateTripCandidate(unreported).map((entry) => entry.code)).toContain(
+      "STAY_WITHOUT_ACCOMMODATION",
+    );
+  });
+
+  it("gives an unallocatable night one reason, not two", () => {
+    const unresolved = trip({
+      id: "unresolved",
+      segments: [sjjToVie, prgToSjj],
+      offers: [
+        offer({ id: "offer-out", segmentIds: [sjjToVie.id], amountMinor: 7500 }),
+        offer({ id: "offer-back", segmentIds: [prgToSjj.id], amountMinor: 9000 }),
+      ],
+      stays: [],
+      gaps: [gap("gap-vie-prg", VIE, PRG, 250)],
+      accommodation: [
+        {
+          state: "unresolved",
+          reason: "unresolved_open_jaw_split",
+          cities: [VIENNA, PRAGUE],
+          checkIn: viennaThreeNights.checkIn,
+          checkOut: pragueFourNights.checkOut,
+          nights: 7,
+        },
+      ],
+    });
+    const result = summary(unresolved);
+    // Unallocatable, not merely uncovered: one reason, and the right one.
+    expect(result.cost.exclusions).toContain("unresolved_accommodation");
+    expect(result.cost.exclusions).not.toContain("accommodation");
+    expect(result.uncoveredNights).toEqual([]);
+  });
+});

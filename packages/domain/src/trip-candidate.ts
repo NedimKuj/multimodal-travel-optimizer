@@ -276,6 +276,25 @@ function nightIsCovered(night: LocalDate, stays: readonly Stay[]): boolean {
   );
 }
 
+/**
+ * Whether a night belongs to a stay whose city cannot be determined.
+ *
+ * Such a night is not *uncovered* — that would mean we could have booked it and
+ * did not. It is unallocatable, which is a different reason with its own
+ * exclusion, so it must not also be counted here (ADR 0016 §3).
+ */
+function nightIsUnresolved(
+  night: LocalDate,
+  accommodation: readonly AccommodationStay[],
+): boolean {
+  return accommodation.some(
+    (entry) =>
+      entry.state === "unresolved" &&
+      compareLocalDates(entry.checkIn, night) <= 0 &&
+      compareLocalDates(night, entry.checkOut) < 0,
+  );
+}
+
 function stayFitsGap(stay: Stay, gap: GroundGap): boolean {
   return (
     compareLocalDates(gap.arrivalDate, stay.checkIn) <= 0 &&
@@ -582,9 +601,14 @@ export function summarizeTrip(trip: TripCandidate): SummarizeTripResult {
   const connections = gaps.filter(
     (gap) => !trip.stays.some((stay) => stayFitsGap(stay, gap)),
   ).length;
+  // Every night gets exactly one reason it has no price: booked, unallocatable,
+  // or uncovered. A night never carries two.
   const uncoveredNights = gaps
     .flatMap(nightsInGap)
-    .filter((night) => !nightIsCovered(night, trip.stays));
+    .filter(
+      (night) =>
+        !nightIsCovered(night, trip.stays) && !nightIsUnresolved(night, trip.accommodation),
+    );
 
   // Fares keep their own provenance; estimates are reported separately, so a
   // retrieved fare is never downgraded by a modelled transfer (ADR 0011).
