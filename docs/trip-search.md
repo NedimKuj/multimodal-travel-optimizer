@@ -130,12 +130,12 @@ problem, `2` the provider failed outright.
 
 ## How a search spends its calls
 
-With `--compose` (and therefore with `--open-jaw`), the search runs a two-stage
+With `--compose` (and therefore with `--open-jaw`), the search runs a staged
 funnel inside a hard budget of **12 provider calls**:
 
 ```text
 Stage 1   one call per departure month: origin → anywhere, one-way
-Stage 2   a return-leg query per destination, cheapest outbound fare first
+Stage 2   a way-home query per candidate, cheapest known reach cost first
 Stage 3   an onward-leg query per destination, with --multi-city only
 ```
 
@@ -157,9 +157,21 @@ had one, and how many were never checked. Return legs are genuinely sparse —
 many destinations have no retrieved way back — so that line is usually the
 explanation for a short result.
 
-Return legs are only queried for the destinations stage 1 found, so a **second
-city** reached by an onward leg may have no retrieved way home at all. The
-output reports that too:
+A way home is sought from **every place a trip could end** — the destinations
+stage 1 found and the second cities stage 3 reaches — ranked together by what it
+is already known to cost to get there (ADR 0015 §7):
+
+```text
+reach cost of a destination   the outbound fare
+reach cost of a second city   the outbound fare plus the onward fare
+```
+
+The way home itself is never part of that ranking: it is exactly what the query
+would find out. Candidates are keyed by the **airport** a return would leave
+from, so Fiumicino and Ciampino are two separate questions even though both are
+Rome, and a trip ending at one never borrows a fare from the other.
+
+Where a second city still has no retrieved way home, the output says so:
 
 ```text
 Second cities reachable onward: 4 (3 with no retrieved way home)
@@ -198,41 +210,36 @@ This is a property of the current discovery source, not of the destination
 universe (ADR 0008). One-way composition and further providers widen it in
 later phases.
 
-### Multi-city rarely composes today
+### Multi-city coverage
 
-Measured 2026-09-19 for `SJJ`:
+Onward legs are found readily. What used to be missing was a way home *from*
+them: return legs were once queried only for the destinations stage 1 found, and
+the second cities an onward leg reaches are a different set. Measured from Rome
+over 26 Dec – 5 Jan 2026: 72 onward destinations, of which exactly **one** was
+also a stage-1 destination.
 
-| Request | Second cities reached | With a retrieved way home |
-|---|---|---|
-| 26 Dec – 3 Jan, 5–7 nights, two-month window | 8 | **0** |
-| 5–20 Dec, 5–7 nights, one-month window | 34 | **0** |
-
-Onward legs are found readily — 77 offers from Rome, 490 across five
-destinations in the December run. What is missing is a way home *from* them.
-
-Return legs are only queried for the destinations **stage 1** found, and the
-second cities an onward leg reaches are a different set. Measured from Rome over
-26 Dec – 5 Jan: 72 onward destinations, of which exactly **one** (Ankara) was
-also a stage-1 destination, and it was not among the eight cheapest that
-composition keeps. In the December run stage 1 found six destinations and got a
-return query for every one of them — the budget was not the constraint there at
-all — while the onward legs reached 34 cities, none of them those six.
-
-So a third leg home cannot be retrieved, and no three-leg itinerary can be
-built, however much budget is left.
-
-The search says so rather than returning nothing without explanation:
+Way-home candidates are now drawn from both (ADR 0015 §7), ranked by what it is
+already known to cost to reach them. A second city can take a query a dearer
+stage-1 destination would have had, and the output says when it did:
 
 ```text
-Second cities reachable onward: 34 (34 with no retrieved way home)
+Way home sought from London (LTN) · reached SJJ → BEG → LTN · known reach cost 80.00 EUR · 1 found
+Way home sought from Hamburg (HAM) · reached SJJ → BEG → HAM · known reach cost 88.00 EUR · 1 found
 ```
 
-Closing this needs second cities to enter the return queue in their own right,
-which is a decision about the funnel rather than a defect in composition.
-Appending them after the stage-1 destinations would not be enough: those are
-still queued ahead. It needs a ranking that mixes the two — a second city's cost
-to reach is its outbound fare *plus* its onward fare, not an outbound fare — and
-that ordering is what decides whether the feature ever fires.
+**Known reach cost is not a trip total.** It is the fares already retrieved to
+get there; the way home is exactly what the query would discover, so it is never
+guessed at in advance.
 
-Until then `--multi-city` spends budget that would otherwise find more ways
-home, so it is off by default.
+Results remain thin, and for a different reason now. Measured 2026-09-20 for
+`SJJ`, 5–20 Dec, 5–7 nights, two travelers: 12 of 12 calls, one three-leg
+itinerary returned (`SJJ → Bergamo → Belgrade → SJJ`, 5 nights Milan and 2 in
+Belgrade), with a further 10 combinations rejected for total nights outside the
+requested range. Second cities do now receive way-home queries and do return
+fares; whether a given pair also fits the requested dates is a property of the
+data.
+
+Enabling `--multi-city` means second cities compete with stage-1 destinations
+for the same queries, so fewer of the latter are checked for a way home. That is
+the intended trade, and the counts report it.
+

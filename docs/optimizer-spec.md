@@ -644,6 +644,20 @@ provider calls as its date range spans calendar months, because this provider
 is queried at month granularity (§27). A two-month window therefore makes a
 single logical return-leg query cost two calls.
 
+### Return candidates
+
+A way home is wanted from every place an itinerary could end: the destinations
+stage 1 found, and the second cities stage 3 reaches. Both compete in one pool,
+ranked by the **known cost to reach them** — the fares already retrieved, never
+the unqueried way home itself, and never an estimate of it.
+
+The pool is keyed by the **return airport**, because that is what a provider
+query asks about. Two airports serving one city may both be candidates and each
+costs its own query; they stay grouped under one destination city for
+presentation (§14, ADR 0010).
+
+This governs candidate *selection*. The allocation below is unchanged by it.
+
 ### Allocating the budget between stages
 
 Stages 2 and 3 compete for what stage 1 leaves. The allocation is:

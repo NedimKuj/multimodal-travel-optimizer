@@ -103,6 +103,63 @@ unexplained discontinuity — a reason that tells the user nothing. Three legs h
 two junctions, so each consecutive pair is validated first and rejected with its
 own counter, exactly as `rejectedReturnBeforeArrival` already does for two.
 
+### 7. Mixed return-candidate discovery
+
+Return legs were queried only for the destinations stage 1 found. That
+structurally prevented most multi-city itineraries from ever completing:
+measured 2026-09-19 from Sarajevo, of 72 onward destinations from Rome exactly
+one was also a stage-1 destination, and it was not among the cheapest few that
+composition keeps. A second city could be reached and never asked about.
+
+A way home is therefore wanted from **every place an itinerary could end**. One
+pool holds both, ranked together.
+
+**Keyed by the return airport, not the city.** `FCO -> SJJ` and `CIA -> SJJ` are
+different commercial searches, and an itinerary ending at Ciampino must not
+quietly acquire a fare leaving from Fiumicino because both are called Rome. Both
+airports may enter the pool and each consumes its own query if selected; they
+remain grouped under one destination city for presentation (ADR 0010). Airports
+enter only from real candidate paths, never by enumerating a city's airports,
+and the budget caps how many are actually asked about.
+
+Should a licensed ground link between two airports of one city ever clear, the
+itinerary `CIA -> Rome -> FCO -> SJJ` is built explicitly as legs and a
+transfer, rather than hidden inside a city-level deduplication.
+
+**Ranked by known reach cost**, the fares already retrieved:
+
+```text
+reachCost(A) = outboundFare(SJJ -> A)                        stage 1
+reachCost(B) = outboundFare(SJJ -> A) + onwardFare(A -> B)   second city
+```
+
+The `B -> SJJ` fare is precisely what the query would discover, so it can play
+no part in deciding whether to make it, and is never estimated in its place.
+Ties break on reach cost, then leg count (a direct destination ahead of one
+reached through another city), then city, then airport: a total order, so a run
+repeats exactly.
+
+Where several paths reach the same airport, the cheapest is kept with its own
+provenance. An airport is decided once — never queried twice, and never
+re-queued after the budget has already refused it.
+
+**Only the onward legs composition will pair are admitted.** Discovery and
+composition share one selection (`one-way-legs.ts`), so a provider call is never
+spent on a second city the optimizer then prunes. Because every onward leg from
+one airport shares the same already-known `SJJ -> A` cost, ranking those legs by
+fare is identical to ranking them by reach cost, so the cap does not distort the
+order.
+
+**Onward discovery still starts only from stage-1 destinations.** That fixes the
+depth of a trip at `SJJ -> A -> B -> SJJ` rather than opening an unconstrained
+traversal; a deeper search is a separate phase with its own budget model.
+
+This changes **which candidates are selected**, not how the budget is allocated.
+The two-query floor and the `return -> onward -> return -> onward` alternation
+are untouched. One consequence follows from the pool being fed as the search
+runs: an onward query refills it, so the alternation ends when a whole round
+runs nothing, rather than when the pool happens to be empty.
+
 ## Consequences
 
 - `assembleCandidate` takes N legs. Two-leg callers are unchanged, so provider
@@ -117,3 +174,9 @@ own counter, exactly as `rejectedReturnBeforeArrival` already does for two.
   enabling it by default would degrade the status of every search.
 - Ranking is unchanged: a multi-city itinerary with a gap still ranks below a
   complete one, in the class ADR 0014 established.
+- A way-home query now carries its provenance — the city, the path that reached
+  it, its known reach cost and whether stage 1 or onward discovery found it — so
+  the output can say why a call was spent where it was.
+- Second cities and stage-1 destinations compete for the same queries, so
+  enabling multi-city can mean fewer stage-1 destinations are checked for a way
+  home. That is the intended trade, and the counts report it.
