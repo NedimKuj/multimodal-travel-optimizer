@@ -1,4 +1,4 @@
-import type { Location } from "@travel-optimizer/domain";
+import type { LocalDate, Location } from "@travel-optimizer/domain";
 
 /*
  * The provider call budget (spec §15, ADR 0015).
@@ -27,7 +27,13 @@ export const DEFAULT_CALL_BUDGET = 12;
 export const GUARANTEED_RETURN_QUERIES = 2;
 
 /** The stages of the funnel, in the order a search runs them. */
-export type SearchStageName = "origin" | "outbound" | "return" | "onward";
+export type SearchStageName =
+  | "origin"
+  | "outbound"
+  | "return"
+  | "onward"
+  /** Accommodation, which draws on its own budget rather than this one. */
+  | "accommodation";
 
 /**
  * Why a query the search would have made never ran.
@@ -38,16 +44,30 @@ export type SearchStageName = "origin" | "outbound" | "return" | "onward";
 export type SkipReason = "call_budget" | "cap";
 
 /**
- * A query that was not made, and why.
+ * What every skipped query shares, whatever it was about.
  *
- * Every stage records skips in this shape, so a search that came back thin has
- * one vocabulary explaining it rather than one per stage.
+ * Stage and reason are one vocabulary across the whole search, so a thin result
+ * has one explanation rather than one per stage. What a query would have been
+ * *about* differs — an airport for transport, a city and dates for
+ * accommodation — so each names its own subject truthfully.
  */
-export interface SkippedQuery {
+export interface SkippedQueryBase {
   readonly stage: SearchStageName;
+  readonly reason: SkipReason;
+}
+
+/** A transport query that was not made, and why. */
+export interface SkippedQuery extends SkippedQueryBase {
   /** What the query would have been about. */
   readonly airport: Location;
-  readonly reason: SkipReason;
+}
+
+/** An accommodation search that was not made, and why. */
+export interface SkippedStaySearch extends SkippedQueryBase {
+  readonly stage: "accommodation";
+  readonly city: Location;
+  readonly checkIn: LocalDate;
+  readonly checkOut: LocalDate;
 }
 
 /** Provider calls one logical query costs, from the range it covers. */
@@ -98,4 +118,42 @@ export function recordSkip(budget: SearchBudget, query: SkippedQuery): void {
 
 export function skippedInStage(budget: SearchBudget, stage: SearchStageName): SkippedQuery[] {
   return budget.skipped.filter((query) => query.stage === stage);
+}
+
+/**
+ * Accommodation's own provider budget (ADR 0016 §7).
+ *
+ * A deliberately distinct type from `SearchBudget`, not an alias: accommodation
+ * is a different source with different quotas and economics, and the transport
+ * budget must never be read or increased to pay for it. Making them separate
+ * types means neither can be passed where the other is expected.
+ *
+ * No default is offered. A caller chooses the limit, because nothing is known
+ * about a provider's economics until one is licensed.
+ */
+export interface AccommodationSearchBudget {
+  readonly maxProviderCalls: number;
+  usedProviderCalls: number;
+  readonly skipped: SkippedStaySearch[];
+}
+
+export function createAccommodationBudget(
+  maxProviderCalls: number,
+): AccommodationSearchBudget {
+  return { maxProviderCalls, usedProviderCalls: 0, skipped: [] };
+}
+
+export function canAffordStay(budget: AccommodationSearchBudget, calls: number): boolean {
+  return budget.usedProviderCalls + calls <= budget.maxProviderCalls;
+}
+
+export function spendOnStay(budget: AccommodationSearchBudget, calls: number): void {
+  budget.usedProviderCalls += calls;
+}
+
+export function recordStaySkip(
+  budget: AccommodationSearchBudget,
+  query: SkippedStaySearch,
+): void {
+  budget.skipped.push(query);
 }
