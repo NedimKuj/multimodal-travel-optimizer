@@ -832,3 +832,73 @@ describe("discoverOneWayLegs — admitting second cities", () => {
     expect(asked.has(code(1))).toBe(false);
   });
 });
+
+describe("discoverOneWayLegs — one account per airport", () => {
+  it("does not report a beyond-shortlist destination as capped once it was queried", async () => {
+    // Istanbul ranks third, outside a shortlist of two, so stage 2 would
+    // normally never consider it. An onward leg from Rome reaches it, which
+    // puts it in the pool on its own merits — and then it must be reported as
+    // queried, not as a destination a cap kept us from.
+    const onward = segment({
+      id: "cia-saw",
+      origin: CIA,
+      destination: SAW,
+      departure: "2026-12-30T10:00+01:00",
+      arrival: "2026-12-30T16:15+03:00",
+    });
+    const discovery = await discoverOneWayLegs(
+      stagedProvider(
+        result([
+          oneWay("to-cia", CIA, 2000),
+          oneWay("to-fco", FCO, 2100),
+          oneWay("to-saw", SAW, 9000),
+        ]),
+        {},
+        [],
+        { CIA: result([{ segments: [onward], offers: [offer("cia-saw-fare", [onward.id], 500)] }]) },
+      ),
+      {
+        window,
+        currency: "EUR",
+        travelers: 2,
+        origins,
+        cities: cityRepository,
+        callBudget: 20,
+        maxEnrichedDestinations: 2,
+        multiCity: true,
+      },
+    );
+
+    const queried = discovery.enriched.map((entry) => entry.airport.iata);
+    expect(queried).toContain("SAW");
+    // Exactly one account of Istanbul: queried, and not also skipped.
+    expect(discovery.skipped.filter((entry) => entry.airport.iata === "SAW")).toEqual([]);
+    const everyAirport = [...queried, ...discovery.skipped.map((entry) => entry.airport.iata)];
+    expect(new Set(everyAirport).size).toBe(everyAirport.length);
+  });
+
+  it("still reports a beyond-shortlist destination nothing reached", async () => {
+    const discovery = await discoverOneWayLegs(
+      stagedProvider(
+        result([
+          oneWay("to-cia", CIA, 2000),
+          oneWay("to-fco", FCO, 2100),
+          oneWay("to-saw", SAW, 9000),
+        ]),
+        {},
+      ),
+      {
+        window,
+        currency: "EUR",
+        travelers: 2,
+        origins,
+        cities: cityRepository,
+        callBudget: 20,
+        maxEnrichedDestinations: 2,
+      },
+    );
+    expect(discovery.skipped.find((entry) => entry.airport.iata === "SAW")).toMatchObject({
+      reason: "cap",
+    });
+  });
+});

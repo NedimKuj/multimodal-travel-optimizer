@@ -64,6 +64,14 @@ export interface ReturnPool {
   take: () => ReturnCandidate | undefined;
   /** Everything still waiting, in the order it would have been taken. */
   remaining: () => ReturnCandidate[];
+  /**
+   * Whether the pool has ever held this airport, waiting or settled.
+   *
+   * Callers that record what was never considered use this to stay out of the
+   * pool's way: an airport the pool reached is accounted for by the pool, and
+   * reporting it a second time would contradict the first.
+   */
+  knows: (airportId: string) => boolean;
   size: () => number;
 }
 
@@ -102,6 +110,7 @@ export function createReturnPool(): ReturnPool {
       return winner;
     },
     remaining: () => [...waiting.values()].sort(compareReturnCandidates),
+    knows: (airportId) => waiting.has(airportId) || settled.has(airportId),
     size: () => waiting.size,
   };
 }

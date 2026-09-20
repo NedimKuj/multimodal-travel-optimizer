@@ -410,8 +410,12 @@ export async function discoverOneWayLegs(
   for (const candidate of onwardQueue) skip(candidate, "onward", "call_budget");
 
   // Destinations past the enrichment cap were never candidates for a call: a
-  // limit of ours stopped them, not the budget.
+  // limit of ours stopped them, not the budget. One may since have been reached
+  // by an onward leg and entered the pool on its own merits, and the pool has
+  // already accounted for it — reporting it capped as well would contradict
+  // the query it was actually given.
   for (const candidate of ranked.slice(shortlist.length)) {
+    if (pool.knows(candidate.airport.id)) continue;
     skip(directCandidate(candidate), "return", "cap");
   }
 

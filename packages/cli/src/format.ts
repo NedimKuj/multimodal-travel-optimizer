@@ -246,7 +246,9 @@ export function formatSearch(trace: SearchTrace, options: FormatOptions): string
       ...(beyondCap > 0 ? [`${String(beyondCap)} beyond the shortlist`] : []),
     ];
     lines.push(
-      `Destinations checked for a way home: ${String(trace.discovery.enriched.length)} (${String(withReturns)} had one)` +
+      // "Places", not "destinations": second cities are counted here too, and
+      // they are not places home flies to directly (ADR 0015 §7).
+      `Places checked for a way home: ${String(trace.discovery.enriched.length)} (${String(withReturns)} had one)` +
         (reasons.length > 0 ? ` · ${reasons.join(" · ")}` : ""),
     );
     // Why a way-home query was spent on a city home cannot reach directly.

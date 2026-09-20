@@ -152,10 +152,11 @@ gone. The output names which stage ran short:
 Calls planned: 12 of 12 budget · budget-limited: 3 onward leg queries not made
 ```
 
-The output also says how many destinations were checked for a way home, how many
-had one, and how many were never checked. Return legs are genuinely sparse —
-many destinations have no retrieved way back — so that line is usually the
-explanation for a short result.
+The output also says how many **places** were checked for a way home, how many
+had one, and how many were never checked. That count covers both destinations
+and second cities, which is why it is not labelled "destinations". Return legs
+are genuinely sparse — many places have no retrieved way back — so that line is
+usually the explanation for a short result.
 
 A way home is sought from **every place a trip could end** — the destinations
 stage 1 found and the second cities stage 3 reaches — ranked together by what it
@@ -242,4 +243,9 @@ data.
 Enabling `--multi-city` means second cities compete with stage-1 destinations
 for the same queries, so fewer of the latter are checked for a way home. That is
 the intended trade, and the counts report it.
+
+Coverage is sensitive to the request. `--nights` and `--flex` change how the
+travel window is derived, which changes what each query costs and therefore
+which places get asked about at all — so two searches over the same dates with
+different night ranges can reach entirely different second cities.
 

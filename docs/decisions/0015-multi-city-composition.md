@@ -29,6 +29,10 @@ only because Dalaman's airport is close to its town.
 The first **2 return-leg query units** are guaranteed, then the allocator
 alternates `return → onward → return → onward` until the budget is exhausted.
 
+This section describes how the budget is **allocated** between the two stages.
+Which candidates a return query is spent on is a separate decision, superseded
+by §7: a way home is sought from second cities as well as stage-1 destinations.
+
 An itinerary with no way home does not exist, while an itinerary with no onward
 leg is simply a shorter trip — so returns earn the floor. Alternating afterwards
 adapts to how many candidates each stage actually has; a fixed proportion (60/40
