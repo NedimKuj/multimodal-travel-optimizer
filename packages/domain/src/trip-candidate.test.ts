@@ -12,9 +12,11 @@ import {
 } from "./test-fixtures/locations.js";
 import { offer, segment } from "./test-fixtures/transport.js";
 import {
+  costScopeFor,
   summarizeTrip,
   tripCandidateSchema,
   validateTripCandidate,
+  type CostExclusion,
   type TripCandidate,
   type TripCandidateInput,
   type TripSummary,
@@ -724,5 +726,38 @@ describe("itineraries with an unpriced gap", () => {
     const { cost } = summary(roundTrip);
     expect(cost.scope).toBe("complete");
     expect(cost.exclusions).toEqual([]);
+  });
+});
+
+describe("costScopeFor", () => {
+  it("is complete when nothing is excluded", () => {
+    expect(costScopeFor([])).toBe("complete");
+  });
+
+  it("names an unpriced sector ahead of a missing night", () => {
+    // A missing sector is the bigger hole, so it wins the label — but the
+    // exclusions list still carries both, which is what keeps them separable.
+    expect(costScopeFor(["unpriced_segment", "accommodation"])).toBe(
+      "excludes_unpriced_segment",
+    );
+    expect(costScopeFor(["unpriced_segment", "unresolved_accommodation"])).toBe(
+      "excludes_unpriced_segment",
+    );
+  });
+
+  it("treats an undeterminable stay as partial accommodation", () => {
+    expect(costScopeFor(["unresolved_accommodation"])).toBe(
+      "transport_and_partial_accommodation",
+    );
+    expect(costScopeFor(["accommodation"])).toBe("transport_and_partial_accommodation");
+  });
+
+  it("keeps an unresolved stay distinct from an unpriced sector", () => {
+    // Two different holes in one itinerary: an open jaw whose sector has no
+    // price and whose nights cannot be allocated is both, and says so.
+    const both: CostExclusion[] = ["unpriced_segment", "unresolved_accommodation"];
+    expect(both).toContain("unpriced_segment");
+    expect(both).toContain("unresolved_accommodation");
+    expect(both).not.toContain("accommodation");
   });
 });

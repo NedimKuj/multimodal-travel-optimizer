@@ -323,7 +323,36 @@ export type TripCostScope =
   | "excludes_unpriced_segment"
   | "transport_and_partial_accommodation";
 
-export type CostExclusion = "unpriced_segment" | "accommodation";
+/**
+ * Every reason an amount is not the whole journey. They are independent: a trip
+ * can be incomplete in more than one way at once, and each is reported.
+ */
+export type CostExclusion =
+  /** A sector of the journey has no price (ADR 0014). */
+  | "unpriced_segment"
+  /** Nights were searched for and left uncovered. */
+  | "accommodation"
+  /** The stay itself cannot be determined, so no search exists (ADR 0016). */
+  | "unresolved_accommodation";
+
+/**
+ * The scope label for a set of exclusions.
+ *
+ * An unpriced sector takes precedence in the label, because a missing sector is
+ * a bigger hole than a missing night — but `exclusions` still lists every
+ * reason, so "excludes a sector" and "excludes accommodation" remain separable
+ * rather than one hiding the other.
+ */
+export function costScopeFor(exclusions: readonly CostExclusion[]): TripCostScope {
+  if (exclusions.includes("unpriced_segment")) return "excludes_unpriced_segment";
+  if (
+    exclusions.includes("accommodation") ||
+    exclusions.includes("unresolved_accommodation")
+  ) {
+    return "transport_and_partial_accommodation";
+  }
+  return "complete";
+}
 
 export interface TripCost {
   /** Sum of selected transport offers for the whole party. */
@@ -544,12 +573,7 @@ export function summarizeTrip(trip: TripCandidate): SummarizeTripResult {
   const exclusions: CostExclusion[] = [];
   if (trip.gaps.length > 0) exclusions.push("unpriced_segment");
   if (uncoveredNights.length > 0) exclusions.push("accommodation");
-  const costScope: TripCostScope =
-    trip.gaps.length > 0
-      ? "excludes_unpriced_segment"
-      : uncoveredNights.length > 0
-        ? "transport_and_partial_accommodation"
-        : "complete";
+  const costScope = costScopeFor(exclusions);
 
   return {
     ok: true,
