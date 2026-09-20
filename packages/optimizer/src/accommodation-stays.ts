@@ -1,6 +1,8 @@
 import {
+  daysBetween,
   localDate,
   lookupCityForAirport,
+  type AccommodationStay,
   type CityRepository,
   type LocalDate,
   type Location,
@@ -30,8 +32,11 @@ export interface StayInterval {
   /**
    * The city the nights belong to — or every city they are split across, when
    * an unpriced sector means we cannot say how (ADR 0016 §3).
+   *
+   * Never empty: an unresolvable airport stands for itself rather than
+   * vanishing, so there is always somewhere to name.
    */
-  readonly cities: readonly Location[];
+  readonly cities: readonly [Location, ...Location[]];
   /**
    * True when no single accommodation search can be constructed, because the
    * traveler crosses between cities on a sector that carries no times.
@@ -46,10 +51,9 @@ function placeOf(location: Location, cities: CityRepository): Location {
   return lookup.ok ? lookup.city : location;
 }
 
-/** Distinct places, in visiting order. */
-function distinct(places: readonly Location[]): Location[] {
-  const seen = new Set<string>();
-  return places.filter((place) => (seen.has(place.id) ? false : (seen.add(place.id), true)));
+/** Distinct places, in visiting order, keeping the list non-empty. */
+function distinct(first: Location, second: Location): readonly [Location, ...Location[]] {
+  return first.id === second.id ? [first] : [first, second];
 }
 
 /**
@@ -60,24 +64,28 @@ function distinct(places: readonly Location[]): Location[] {
  */
 export function deriveStayIntervals(
   boundaries: readonly StayBoundary[],
-  nightsByStay: readonly number[],
   cities: CityRepository,
 ): StayInterval[] {
   const intervals: StayInterval[] = [];
 
-  for (const [index, boundary] of boundaries.entries()) {
-    const nights = nightsByStay[index] ?? 0;
+  for (const boundary of boundaries) {
+    const checkIn = localDate(boundary.reached.arrivalAt);
+    const checkOut = localDate(boundary.left.departureAt);
+    // The same count `evaluateTrip` reaches for the same junction, so the two
+    // can never disagree about how long the traveler is somewhere.
+    const nights = daysBetween(checkIn, checkOut);
     if (nights < 1) continue;
 
     // Where the traveler actually is at each end of the stay. For an ordinary
     // stop these are the same place; across an unpriced sector they are not.
-    const arrivedAt = placeOf(boundary.reached.destination, cities);
-    const leftFrom = placeOf(boundary.left.origin, cities);
-    const spanned = distinct([arrivedAt, leftFrom]);
+    const spanned = distinct(
+      placeOf(boundary.reached.destination, cities),
+      placeOf(boundary.left.origin, cities),
+    );
 
     intervals.push({
-      checkIn: localDate(boundary.reached.arrivalAt),
-      checkOut: localDate(boundary.left.departureAt),
+      checkIn,
+      checkOut,
       nights,
       cities: spanned,
       // A gap is what makes the allocation undeterminable — but only when it
@@ -88,4 +96,35 @@ export function deriveStayIntervals(
   }
 
   return intervals;
+}
+
+/**
+ * The coverage a stay has before anything has been searched.
+ *
+ * An unresolved interval is final: no provider call can tell us how to divide
+ * nights across cities when the sector between them carries no times
+ * (ADR 0016 §3). Everything else is simply not searched yet, and the search
+ * stage says why — no provider, or outside the shortlist.
+ */
+export function initialAccommodation(
+  intervals: readonly StayInterval[],
+  reason: "no_provider" | "outside_shortlist" | "other",
+): AccommodationStay[] {
+  return intervals.map((interval) => {
+    const shared = {
+      checkIn: interval.checkIn,
+      checkOut: interval.checkOut,
+      nights: interval.nights,
+    };
+    if (interval.unresolved) {
+      return {
+        state: "unresolved" as const,
+        reason: "unresolved_open_jaw_split" as const,
+        cities: [...interval.cities],
+        ...shared,
+      };
+    }
+    // A resolved interval names exactly one place, and the type guarantees it.
+    return { state: "not_searched" as const, reason, city: interval.cities[0], ...shared };
+  });
 }

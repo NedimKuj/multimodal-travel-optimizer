@@ -24,7 +24,11 @@ import {
   type TripSummary,
 } from "@travel-optimizer/domain";
 
-import { deriveStayIntervals, type StayInterval } from "./accommodation-stays.js";
+import {
+  deriveStayIntervals,
+  initialAccommodation,
+  type StayInterval,
+} from "./accommodation-stays.js";
 import type { SkippedQuery } from "./budget.js";
 import type { DiscoveryFunnel } from "./discovery.js";
 import type { ReachSource } from "./return-pool.js";
@@ -630,6 +634,11 @@ export function assembleCandidate(input: AssembleCandidateInput): AttemptOutcome
     };
   }
 
+  // Where this trip needs a bed, and what is known about it. Nothing has been
+  // searched at assembly time, so every resolvable stay starts unsearched and
+  // the search stage refines it; an unresolved one is already final (ADR 0016).
+  const stayIntervals = deriveStayIntervals(access.stays, context.cities);
+
   const candidate: TripCandidate = {
     id: input.id,
     origin: first.origin,
@@ -638,6 +647,7 @@ export function assembleCandidate(input: AssembleCandidateInput): AttemptOutcome
     offers: [...input.offers, ...access.offers, ...originAccess.offers],
     stays: [],
     gaps,
+    accommodation: initialAccommodation(stayIntervals, "outside_shortlist"),
   };
 
   const summarized = summarizeTrip(candidate);
@@ -701,11 +711,7 @@ export function assembleCandidate(input: AssembleCandidateInput): AttemptOutcome
       summary: summarized.summary,
       nights: evaluation.nights,
       nightsByStay: evaluation.nightsByStay,
-      stayIntervals: deriveStayIntervals(
-        access.stays,
-        evaluation.nightsByStay,
-        context.cities,
-      ),
+      stayIntervals,
       destinationAirports: visitedAirports(legs),
     },
   };

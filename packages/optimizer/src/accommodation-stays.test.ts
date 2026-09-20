@@ -1,7 +1,7 @@
 import { parseUtcInstant, type TransportSegment } from "@travel-optimizer/domain";
 import { describe, expect, it } from "vitest";
 
-import { deriveStayIntervals } from "./accommodation-stays.js";
+import { deriveStayIntervals, initialAccommodation } from "./accommodation-stays.js";
 import { DEFAULT_CONNECTION_RULES } from "./connection-rules.js";
 import { assembleCandidate, type CandidateContext } from "./flight-exploration.js";
 import { DEFAULT_GROUND_TRANSFER_CONFIG } from "./ground-transfer.js";
@@ -103,7 +103,7 @@ describe("deriveStayIntervals", () => {
 
   it("gives a multi-city trip one stay per city", () => {
     const { stayIntervals } = assemble([toRome, romeToMilan, homeFromMilan]);
-    expect(stayIntervals.map((entry) => entry.cities[0]?.name)).toEqual(["Rome", "Milan"]);
+    expect(stayIntervals.map((entry) => entry.cities[0].name)).toEqual(["Rome", "Milan"]);
     expect(stayIntervals.map((entry) => entry.nights)).toEqual([3, 3]);
     expect(stayIntervals.every((entry) => !entry.unresolved)).toBe(true);
   });
@@ -140,22 +140,86 @@ describe("deriveStayIntervals", () => {
   });
 
   it("produces nothing for a junction with no nights", () => {
-    expect(deriveStayIntervals([], [], cityRepository)).toEqual([]);
+    expect(deriveStayIntervals([], cityRepository)).toEqual([]);
   });
 
   it("skips a junction the trip only connects through", () => {
-    // Same two junctions, but the first has no nights: a connection, governed
-    // by minimum connection times, not a destination needing a bed.
+    // Landing in Rome and flying on the same afternoon is a connection,
+    // governed by minimum connection times, not a destination needing a bed.
+    const sameDayOnward = segment({
+      id: "cia-mxp-sameday",
+      origin: CIA,
+      destination: MXP,
+      departure: "2026-12-27T17:00+01:00",
+      arrival: "2026-12-27T18:15+01:00",
+    });
     const intervals = deriveStayIntervals(
       [
-        { reached: toRome, left: romeToMilan, place: CIA },
-        { reached: romeToMilan, left: homeFromMilan, place: MXP },
+        { reached: toRome, left: sameDayOnward, place: CIA },
+        { reached: sameDayOnward, left: homeFromMilan, place: MXP },
       ],
-      [0, 3],
       cityRepository,
     );
     expect(intervals).toHaveLength(1);
-    expect(intervals[0]).toMatchObject({ nights: 3 });
     expect(intervals[0]?.cities[0]?.name).toBe("Milan");
+  });
+
+  it("counts the same nights the window evaluation does", () => {
+    // Two derivations of the same fact must never disagree.
+    const attempt = assemble([toRome, romeToMilan, homeFromMilan]);
+    expect(attempt.stayIntervals.map((entry) => entry.nights)).toEqual(
+      attempt.nightsByStay.filter((nights) => nights > 0),
+    );
+  });
+});
+
+describe("initialAccommodation", () => {
+  it("marks an open-jaw stay unresolved, naming every city", () => {
+    const { candidate } = assemble([toMilan, homeFromRome], { allowOpenJaw: true });
+    const [entry] = candidate.accommodation;
+    expect(entry?.state).toBe("unresolved");
+    if (entry?.state !== "unresolved") throw new Error("expected an unresolved stay");
+    expect(entry.reason).toBe("unresolved_open_jaw_split");
+    expect(entry.cities.map((city) => city.name)).toEqual(["Milan", "Rome"]);
+  });
+
+  it("invents no split: an unresolved stay names no single city", () => {
+    const { candidate } = assemble([toMilan, homeFromRome], { allowOpenJaw: true });
+    // Nothing in the entry can be read as "the nights belong to Milan".
+    expect(candidate.accommodation[0]).not.toHaveProperty("city");
+  });
+
+  it("leaves a resolvable stay unsearched rather than unpriced", () => {
+    const { candidate } = assemble([toRome, homeFromRome]);
+    const [entry] = candidate.accommodation;
+    expect(entry?.state).toBe("not_searched");
+    // Never "unpriced": no one has asked yet, so nothing was answered.
+    expect(entry?.state).not.toBe("unpriced");
+  });
+
+  it("reports an unresolved stay separately from the unpriced sector", () => {
+    const { summary } = assemble([toMilan, homeFromRome], { allowOpenJaw: true });
+    expect(summary.cost.exclusions).toContain("unresolved_accommodation");
+    expect(summary.cost.exclusions).toContain("unpriced_segment");
+    // Two different holes, both named.
+    expect(summary.cost.scope).toBe("excludes_unpriced_segment");
+  });
+
+  it("adds no accommodation amount for a stay in any unpriced state", () => {
+    for (const legs of [
+      [toRome, homeFromRome],
+      [toMilan, homeFromRome],
+      [toRome, romeToMilan, homeFromMilan],
+    ]) {
+      const { summary } = assemble(legs, { allowOpenJaw: true });
+      expect(summary.cost.accommodation).toEqual({ amountMinor: 0, currency: "EUR" });
+      expect(summary.cost.total).toEqual(summary.cost.transport);
+    }
+  });
+
+  it("carries the reason through for a trip with no provider", () => {
+    const { stayIntervals } = assemble([toRome, homeFromRome]);
+    const [entry] = initialAccommodation(stayIntervals, "no_provider");
+    expect(entry).toMatchObject({ state: "not_searched", reason: "no_provider" });
   });
 });

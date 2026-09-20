@@ -1,6 +1,11 @@
 import { z } from "zod";
 
-import { staySchema, type Stay } from "./accommodation.js";
+import {
+  accommodationStaySchema,
+  staySchema,
+  type AccommodationStay,
+  type Stay,
+} from "./accommodation.js";
 import { DomainError, type DomainIssue } from "./errors.js";
 import { locationSchema, type Location } from "./location.js";
 import type { CurrencyCode } from "./money/currency.js";
@@ -57,6 +62,14 @@ export const tripCandidateSchema = z.object({
   stays: z.array(staySchema),
   /** Sectors the traveler arranges themselves; excluded from every amount. */
   gaps: z.array(itineraryGapSchema).default([]),
+  /**
+   * What is known about a bed for each period on the ground (ADR 0016).
+   *
+   * `stays` remains the priced source of truth for the amount; this says what
+   * happened for every stay, priced or not, so a night we never searched for
+   * cannot read like a night with nothing available.
+   */
+  accommodation: z.array(accommodationStaySchema).default([]),
 });
 
 export type TripCandidate = z.infer<typeof tripCandidateSchema>;
@@ -203,6 +216,7 @@ export function validateTripCandidate(trip: TripCandidate): DomainIssue[] {
   }
 
   issues.push(...validateStays(trip));
+  issues.push(...validateAccommodation(trip));
 
   const currencies = new Set<CurrencyCode>([
     ...offers.map((offer) => offer.price.currency),
@@ -306,6 +320,43 @@ function validateStays(trip: TripCandidate): DomainIssue[] {
     }
   }
 
+  return issues;
+}
+
+/**
+ * Coverage must agree with the priced stays it claims.
+ *
+ * A priced entry names a `Stay`, and that same stay must be among the trip's
+ * priced stays — otherwise an amount could be claimed that no stay backs, or a
+ * stay could be paid for that coverage never mentions.
+ */
+function validateAccommodation(trip: TripCandidate): DomainIssue[] {
+  const issues: DomainIssue[] = [];
+  const pricedIds = new Set(trip.stays.map((stay) => stay.id));
+  const claimed = new Set<string>();
+
+  for (const entry of trip.accommodation) {
+    if (entry.state !== "priced") continue;
+    claimed.add(entry.stay.id);
+    if (!pricedIds.has(entry.stay.id)) {
+      issues.push(
+        issue(
+          "ACCOMMODATION_WITHOUT_STAY",
+          `Accommodation claims stay ${entry.stay.id} as priced, but the trip does not carry it`,
+        ),
+      );
+    }
+  }
+  for (const stay of trip.stays) {
+    if (!claimed.has(stay.id) && trip.accommodation.length > 0) {
+      issues.push(
+        issue(
+          "STAY_WITHOUT_ACCOMMODATION",
+          `Stay ${stay.id} is priced but no accommodation entry reports it`,
+        ),
+      );
+    }
+  }
   return issues;
 }
 
@@ -442,6 +493,8 @@ export interface TripSummary {
   readonly provenance: TripProvenance;
   /** Sectors excluded from every amount, kept so output can show them. */
   readonly unpricedGaps: readonly ItineraryGap[];
+  /** What is known about a bed for each period on the ground (ADR 0016). */
+  readonly accommodation: readonly AccommodationStay[];
 }
 
 export type SummarizeTripResult =
@@ -570,9 +623,13 @@ export function summarizeTrip(trip: TripCandidate): SummarizeTripResult {
     partiallyEstimated: estimates.length > 0,
   };
 
+  // An unresolved stay is a different hole from an uncovered night: we cannot
+  // even say what to search for, rather than having searched and found nothing.
+  const unresolvedStays = trip.accommodation.filter((entry) => entry.state === "unresolved");
   const exclusions: CostExclusion[] = [];
   if (trip.gaps.length > 0) exclusions.push("unpriced_segment");
   if (uncoveredNights.length > 0) exclusions.push("accommodation");
+  if (unresolvedStays.length > 0) exclusions.push("unresolved_accommodation");
   const costScope = costScopeFor(exclusions);
 
   return {
@@ -606,6 +663,7 @@ export function summarizeTrip(trip: TripCandidate): SummarizeTripResult {
       connections,
       provenance,
       unpricedGaps: trip.gaps,
+      accommodation: trip.accommodation,
     },
   };
 }
