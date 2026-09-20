@@ -375,6 +375,33 @@ describe("formatSearch — multi-city", () => {
     expect(output).toContain("Calls planned:");
   });
 
+  it("says why a way home was sought from a city home cannot reach", async () => {
+    // Milan is reachable only on from Rome, so its way-home query exists
+    // solely because onward discovery put it in the return pool.
+    const trace = await runFlightSearch(
+      request({ allowMultiCity: true }),
+      {
+        flightProvider: provider(
+          [leg("out-cia", SJJ, CIA, ["2026-12-27T10:00", "2026-12-27T11:30"], 4000)],
+          {
+            CIA: [leg("back-cia", CIA, SJJ, ["2027-01-02T18:00", "2027-01-02T19:30"], 3000)],
+            MXP: [leg("back-mxp", MXP, SJJ, ["2027-01-02T18:00", "2027-01-02T19:45"], 3500)],
+          },
+          { CIA: [leg("cia-mxp", CIA, MXP, ["2026-12-30T10:00", "2026-12-30T11:15"], 2000)] },
+        ),
+        cities: cityRepository,
+        geography: fixtureGeography,
+        airports: fixtureAirports,
+      },
+      { currency: "EUR", now: fixedClock(), newSearchId: () => "search-p", strategy: "composed" },
+    );
+    const output = formatSearch(trace, { limit: 10 });
+    expect(output).toContain("Way home sought from Milan (MXP)");
+    expect(output).toContain("reached SJJ → CIA → MXP");
+    // 40.00 to Rome plus 20.00 on to Milan. The unknown way home is not in it.
+    expect(output).toContain("known reach cost 60.00 EUR");
+  });
+
   it("reports second cities with no retrieved way home", async () => {
     const stranded = await runFlightSearch(
       request({ allowMultiCity: true }),

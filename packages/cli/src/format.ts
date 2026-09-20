@@ -249,6 +249,17 @@ export function formatSearch(trace: SearchTrace, options: FormatOptions): string
       `Destinations checked for a way home: ${String(trace.discovery.enriched.length)} (${String(withReturns)} had one)` +
         (reasons.length > 0 ? ` · ${reasons.join(" · ")}` : ""),
     );
+    // Why a way-home query was spent on a city home cannot reach directly.
+    const viaSecondCity = trace.discovery.enriched.filter((entry) => entry.source === "onward");
+    for (const entry of viaSecondCity) {
+      const name = entry.city?.name ?? entry.airport.name;
+      const path = [request.origin, ...entry.via.map((stop) => stop.iata ?? stop.name)].join(" → ");
+      lines.push(
+        `Way home sought from ${name} (${entry.airport.iata ?? entry.airport.id})` +
+          ` · reached ${path} · known reach cost ${formatMoney({ amountMinor: entry.reachCostMinor, currency: trace.currency })}` +
+          ` · ${entry.returnOffersFound > 0 ? `${String(entry.returnOffersFound)} found` : "none found"}`,
+      );
+    }
     if (counts.secondCitiesReached > 0) {
       lines.push(
         `Second cities reachable onward: ${String(counts.secondCitiesReached)}` +
