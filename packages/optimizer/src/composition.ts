@@ -1,9 +1,4 @@
-import {
-  lookupCityForAirport,
-  type SearchRequest,
-  type TransportOffer,
-  type TransportSegment,
-} from "@travel-optimizer/domain";
+import { lookupCityForAirport, type SearchRequest } from "@travel-optimizer/domain";
 
 import type { DiscoveryResult } from "./discovery.js";
 import {
@@ -12,6 +7,13 @@ import {
   type CandidateContext,
   type ExplorationCounts,
 } from "./flight-exploration.js";
+import {
+  legsFrom,
+  MAX_OFFERS_PER_AIRPORT,
+  oneWayLegs,
+  rankLegs,
+  type OneWayLeg,
+} from "./one-way-legs.js";
 import type { TravelWindow } from "./travel-window.js";
 
 /*
@@ -35,10 +37,7 @@ export interface CompositionConfig {
    * is not offered at all rather than offered with a caveat.
    */
   readonly maxUnpricedGapKm: number;
-  /**
-   * Fares kept per airport before pairing. Composition is quadratic, so this
-   * caps the work while keeping the cheapest options (spec §15 pruning).
-   */
+  /** Fares kept per airport before pairing (`one-way-legs.ts`). */
   readonly maxOffersPerAirport: number;
   /**
    * Nights required in each city a multi-stop trip stops at. A city passed
@@ -49,42 +48,9 @@ export interface CompositionConfig {
 
 export const DEFAULT_COMPOSITION_CONFIG: CompositionConfig = {
   maxUnpricedGapKm: 800,
-  maxOffersPerAirport: 8,
+  maxOffersPerAirport: MAX_OFFERS_PER_AIRPORT,
   minNightsPerCity: 1,
 };
-
-/** A one-way fare over exactly one segment. */
-interface OneWayLeg {
-  readonly offer: TransportOffer;
-  readonly segment: TransportSegment;
-}
-
-function oneWayLegs(
-  segments: readonly TransportSegment[],
-  offers: readonly TransportOffer[],
-): OneWayLeg[] {
-  const byId = new Map(segments.map((segment) => [segment.id, segment]));
-  const legs: OneWayLeg[] = [];
-  for (const offer of offers) {
-    if (offer.segmentIds.length !== 1) continue;
-    const [segmentId] = offer.segmentIds;
-    const segment = segmentId === undefined ? undefined : byId.get(segmentId);
-    if (segment === undefined) continue;
-    legs.push({ offer, segment });
-  }
-  return legs;
-}
-
-/** Cheapest first, then segment id: deterministic before any capping. */
-function rankLegs(legs: readonly OneWayLeg[], cap: number): OneWayLeg[] {
-  return [...legs]
-    .sort(
-      (a, b) =>
-        a.offer.price.amountMinor - b.offer.price.amountMinor ||
-        a.segment.id.localeCompare(b.segment.id),
-    )
-    .slice(0, cap);
-}
 
 function groupByAirport(
   legs: readonly OneWayLeg[],
@@ -142,12 +108,15 @@ export function composeItineraries(input: ComposeInput): CompositionResult {
   const onwardByAirport = new Map<string, OneWayLeg[]>();
   if (input.request.allowMultiCity) {
     for (const [airportId, legs] of discovery.onwardByAirport) {
-      const forward = oneWayLegs(legs.segments, legs.offers).filter(
-        (leg) => leg.segment.origin.id === airportId,
+      // The very same selection discovery used to decide which second cities
+      // were worth a way-home query, so a query is never spent on a leg that
+      // is then pruned here (ADR 0015 §7).
+      const forward = legsFrom(
+        oneWayLegs(legs.segments, legs.offers),
+        airportId,
+        config.maxOffersPerAirport,
       );
-      if (forward.length > 0) {
-        onwardByAirport.set(airportId, rankLegs(forward, config.maxOffersPerAirport));
-      }
+      if (forward.length > 0) onwardByAirport.set(airportId, forward);
     }
   }
 
