@@ -140,10 +140,13 @@ function formatProvenance(candidate: RankedCandidate): string {
   );
   if (offer === undefined) return "";
   const fetched = offer.provenance.fetchedAt.slice(0, 16).replace("T", " ");
+  // "usable until", not "expires": for a cached fare this is the boundary past
+  // which we may no longer use the price, which is not a claim that the fare
+  // itself stays purchasable until then.
   const expiry =
     offer.provenance.expiresAt === undefined
       ? "no provider expiry (freshness unknown)"
-      : `expires ${offer.provenance.expiresAt.slice(0, 16).replace("T", " ")}`;
+      : `usable until ${offer.provenance.expiresAt.slice(0, 16).replace("T", " ")}`;
   return `   ${offer.provenance.sourceType} price · checked ${fetched}Z · ${offer.provenance.provider} · ${expiry}`;
 }
 

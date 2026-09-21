@@ -2,6 +2,7 @@ import {
   failedResult,
   money,
   okResult,
+  parseUtcInstant,
   type FlightSearchQuery,
 } from "@travel-optimizer/domain";
 import {
@@ -122,10 +123,28 @@ describe("formatSearch", () => {
     expect(output).not.toContain("change(s)");
   });
 
-  it("states that a cached fare has no provider expiry", async () => {
+  it("states that a fare carrying no expiry has unknown freshness", async () => {
     const output = formatSearch(await trace([romeTrip]), { limit: 10 });
     expect(output).toContain("cached price · checked 2026-09-18 09:00Z");
     expect(output).toContain("no provider expiry (freshness unknown)");
+  });
+
+  it("reports an expiry as a use boundary, not as fare validity", async () => {
+    // An Aviasales fare carries a derived retention boundary. Calling that
+    // "expires" would read as a promise the fare stays purchasable until then.
+    const withExpiry = {
+      ...romeTrip,
+      offer: {
+        ...romeTrip.offer,
+        provenance: {
+          ...romeTrip.offer.provenance,
+          expiresAt: parseUtcInstant("2026-09-19T09:00:00Z"),
+        },
+      },
+    };
+    const output = formatSearch(await trace([withExpiry]), { limit: 10 });
+    expect(output).toContain("usable until 2026-09-19 09:00");
+    expect(output).not.toContain("expires 2026-09-19");
   });
 
   it("omits a booking link when the fare has none", async () => {
