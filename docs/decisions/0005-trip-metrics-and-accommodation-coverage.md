@@ -68,7 +68,7 @@ not `complete` must never be presented as a complete-trip cost.
   accommodation before comparing.
 - A night spent on an overnight train is not a night on the ground and so is
   never counted as uncovered.
-- Still open: a trip whose last segment does not return to the origin (one-way)
-  has no closing departure, so nights after the final arrival are outside the
-  model. Such trips cannot carry a stay after that arrival yet. To be decided
-  before one-way trips are generated.
+- **Resolved by `docs/decisions/0018-one-way-trips.md`**: a trip whose last
+  segment does not return to the origin has no closing departure, so it carries
+  its declared end instead. Time on the ground is bounded by the next departure,
+  or by the trip's declared end.

@@ -65,6 +65,30 @@ A **known cost** is not a total. Itineraries with a gap are ranked in their own
 class, always below fully priced ones, so a trip never looks cheap because of
 the sector it leaves out (ADR 0014).
 
+`--one-way <date>` searches a trip that does not come back, ending on the date
+given. Use it instead of `--to`:
+
+```bash
+pnpm trip-search --origin SJJ --from 2026-12-26 --one-way 2027-01-03 --people 2
+```
+
+```text
+1. Rome (IT) — FCO
+   107.88 EUR / person · 215.76 EUR known cost · excludes some accommodation
+   Accommodation Rome: not searched — 8 nights · no accommodation provider
+   8 nights · 2h 21m travelling · direct
+   fly      2026-12-26 17:10 SJJ → 2026-12-26 18:35 FCO · 1h 25m · direct · W4 6160
+   transfer 2026-12-26 19:20 FCO → 2026-12-26 20:16 ROM · 56m · estimated
+```
+
+One leg, and nothing brings the traveler home — **no closing flight is
+invented** to make the trip look symmetrical. The stay runs from when they reach
+the city to the date given, so a distant airport shortens it.
+
+**The end date is never widened by `--flex`.** Flexibility moves the departure,
+as it always has; moving the end would book nights past the boundary you asked
+for. `--to` and `--one-way` cannot both be given: a trip returns or it ends.
+
 `--multi-city` allows a second city on the way, and implies `--compose`:
 
 ```text

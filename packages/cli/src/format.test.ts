@@ -480,3 +480,34 @@ describe("formatSearch — redundant alternatives", () => {
     expect(output).not.toContain("Redundant alternatives removed");
   });
 });
+
+describe("formatSearch — one-way", () => {
+  it("does not call a single leg direct both ways", async () => {
+    const oneWay = await runFlightSearch(
+      request({
+        returnDate: undefined,
+        endDate: "2027-01-02",
+        minNights: undefined,
+        maxNights: undefined,
+        flexibilityDays: 0,
+        departureDate: "2026-12-27",
+      }),
+      {
+        flightProvider: stubFlightProvider(
+          searchResult([
+            {
+              segments: [romeTrip.segments[0]].filter((s) => s !== undefined),
+              offer: offer("one-way-fare", [romeTrip.segments[0]?.id ?? ""], 6000),
+            },
+          ]),
+        ),
+        cities: cityRepository,
+        geography: fixtureGeography,
+        airports: fixtureAirports,
+      },
+      { currency: "EUR", now: fixedClock(), newSearchId: () => "search-ow", strategy: "composed" },
+    );
+    const output = formatSearch(oneWay, { limit: 5 });
+    expect(output).not.toContain("direct both ways");
+  });
+});

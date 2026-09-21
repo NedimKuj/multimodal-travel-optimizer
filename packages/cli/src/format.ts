@@ -38,8 +38,12 @@ function formatStops(segment: TransportSegment): string {
 }
 
 function formatStopCount(stops: number, pricedLegs: number): string {
-  // "Both ways" is only true of a trip with two legs.
-  if (stops === 0) return pricedLegs > 2 ? "direct on every leg" : "direct both ways";
+  // "Both ways" is only true of a trip with exactly two legs. A one-way has
+  // one, a multi-city three or more.
+  if (stops === 0) {
+    if (pricedLegs <= 1) return "direct";
+    return pricedLegs > 2 ? "direct on every leg" : "direct both ways";
+  }
   return stops === 1 ? "1 stop" : `${String(stops)} stops`;
 }
 

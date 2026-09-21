@@ -266,7 +266,10 @@ interface SearchRequest {
   destination?: string | null
 
   departureDate?: string
+  /** A round trip returns on this date. */
   returnDate?: string
+  /** A one-way trip ends on this date. Never both (§8, ADR 0018). */
+  endDate?: string
 
   flexibilityDays?: number
 
@@ -329,6 +332,33 @@ return    ∈ [returnDate    ± flexibilityDays]
 
 A window that cannot contain `minNights` is an explicit issue on the request,
 not a search that silently returns nothing.
+
+### One-way trips
+
+A trip that does not come back has no closing departure to bound it, so the
+traveler states where it ends (`docs/decisions/0018-one-way-trips.md`):
+
+```text
+round trip   departureDate -> returnDate
+one-way      departureDate -> endDate
+```
+
+`returnDate` and `endDate` are mutually exclusive: they answer the same question
+for different trip shapes, and a request carrying both is refused rather than
+letting one silently win.
+
+**The declared end is a hard ceiling and is never flexed.** Flexibility widens
+the departure as always; widening the end would book nights past the boundary
+the traveler set, and narrowing it would check out before the date they asked
+for. A departure flexed past the end is clamped to it.
+
+A one-way itinerary has one transport path and a final arrival. **No closing
+segment is invented** to make the model fit, and the outbound departure is never
+reported as a return: `returnDate` is simply absent, while `tripEndDate` carries
+the trip's actual end whatever its shape.
+
+Accommodation runs from the final arrival — after any access transfer, so a
+distant airport shortens the stay — to the declared end exactly.
 
 It must not silently expand beyond the user's requested range.
 
