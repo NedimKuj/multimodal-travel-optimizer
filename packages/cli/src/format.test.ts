@@ -447,3 +447,36 @@ describe("formatSearch — multi-city", () => {
     expect(output).toContain("1 with no retrieved way home");
   });
 });
+
+describe("formatSearch — redundant alternatives", () => {
+  /** Two fares to Rome: one strictly worse on cost, time and stops. */
+  const redundant = roundTrip({
+    id: "rome-worse",
+    destination: FCO,
+    outbound: ["2026-12-27T10:00+01:00", "2026-12-27T13:30+01:00"],
+    inbound: ["2027-01-02T18:00+01:00", "2027-01-02T20:30+01:00"],
+    amountMinor: 30000,
+    transfers: 2,
+  });
+
+  it("reports what was removed, and does not fold it into the filtered-out counts", async () => {
+    const output = formatSearch(await trace([romeTrip, redundant]), { limit: 10 });
+    expect(output).toContain("Redundant alternatives removed: 1 of 2 · 1 distinct");
+    // Separate line from "Filtered out", which is about candidates that were
+    // never viable rather than merely redundant.
+    expect(output).not.toMatch(/Filtered out:.*[Rr]edundant/);
+  });
+
+  it("counts what survived pruning, not what was built", async () => {
+    const output = formatSearch(await trace([romeTrip, redundant]), { limit: 10 });
+    // Two were built, one was redundant: the list below shows one, and so
+    // must the count above it.
+    expect(output).toContain("Candidates: 1 across 1 destination(s)");
+    expect(output).not.toContain("Candidates: 2 across");
+  });
+
+  it("says nothing when every candidate is distinct", async () => {
+    const output = formatSearch(await trace(), { limit: 10 });
+    expect(output).not.toContain("Redundant alternatives removed");
+  });
+});

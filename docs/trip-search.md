@@ -209,6 +209,35 @@ two guaranteed ways home and nothing else.
 The 12 is an application-level safety limit of our own, not the provider's
 quota, which remains unverified (`docs/provider-compliance.md`).
 
+## Redundant alternatives
+
+Several fares often reach the same place in the same shape, and some of them
+are simply worse than another on every axis: no cheaper, no quicker, and no
+simpler. Those are removed before accommodation is priced, and the output says
+how many:
+
+```text
+Redundant alternatives removed: 3 of 11 · 8 distinct
+```
+
+**Only truly interchangeable candidates are compared.** A candidate may be
+removed only by another to the **same destination**, in the **same trip shape**,
+with the **same cost scope** and the **same accommodation completeness**. So a
+cheaper trip to Rome never eliminates Milan, a round trip never eliminates a
+multi-city trip, and a known cost that omits a sector never eliminates a fully
+priced trip by looking cheaper (`docs/decisions/0017-dominance-pruning.md`).
+
+The dimensions are cost, travel time, and changes (`stops + connections`). A
+candidate must be no worse on all three and better on at least one; two
+candidates that tie are both kept.
+
+**Trip length is deliberately not a dimension.** A five-night trip and a
+seven-night trip are different products, not better and worse versions of one —
+`--nights` already bounds what is acceptable.
+
+This line is separate from the filtered-out counts, which explain candidates
+that were never viable. These were viable and merely redundant.
+
 ## Accommodation
 
 Nothing is priced, and the search says so per stay rather than staying silent:

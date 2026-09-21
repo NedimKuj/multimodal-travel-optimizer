@@ -385,8 +385,19 @@ export function formatSearch(trace: SearchTrace, options: FormatOptions): string
     counts.rejectedInvalid > 0 ? `${String(counts.rejectedInvalid)} unusable` : "",
   ].filter((entry) => entry !== "");
   if (rejected.length > 0) lines.push(`Filtered out: ${rejected.join(" · ")}`);
+  if (trace.pruning !== undefined && trace.pruning.pruned > 0) {
+    // Reported apart from the filtered-out counts above: those candidates were
+    // never viable, these were viable and merely redundant (ADR 0017).
+    lines.push(
+      `Redundant alternatives removed: ${String(trace.pruning.pruned)} of ${String(trace.pruning.entered)}` +
+        ` · ${String(trace.pruning.remaining)} distinct`,
+    );
+  }
+  // What survived, not what was built: pruning runs after the counts above are
+  // taken, so `candidatesBuilt` would overstate the list that follows.
+  const surviving = trace.pruning?.remaining ?? counts.candidatesBuilt;
   lines.push(
-    `Candidates: ${String(counts.candidatesBuilt)} across ${String(counts.destinations)} destination(s)` +
+    `Candidates: ${String(surviving)} across ${String(counts.destinations)} destination(s)` +
       (counts.multiCityCandidatesBuilt > 0
         ? ` · ${String(counts.multiCityCandidatesBuilt)} multi-city`
         : ""),
