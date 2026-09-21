@@ -12,6 +12,7 @@ export {
   type EnrichmentRecord,
   type SkippedDestination,
 } from "./discovery.js";
+export * from "./dominance.js";
 export * from "./flight-exploration.js";
 export * from "./ground-transfer.js";
 export * from "./one-way-legs.js";
