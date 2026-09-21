@@ -9,9 +9,10 @@ import {
   searchResult,
   stubFlightProvider,
 } from "@travel-optimizer/optimizer/test-fixtures";
+import { AVIASALES_MAX_RETENTION_MS, aviasalesRetentionTtl } from "@travel-optimizer/providers";
 import { describe, expect, it } from "vitest";
 
-import { run, type CliIo, type RunOverrides } from "./run.js";
+import { CACHE_TTL_MS, run, type CliIo, type RunOverrides } from "./run.js";
 
 const TOKEN = "secret-token-value";
 
@@ -154,5 +155,21 @@ describe("run — output safety", () => {
     expect(parsed).toMatchObject({
       request: { budget: { kind: "total", amount: { amountMinor: 70000, currency: "EUR" } } },
     });
+  });
+});
+
+describe("response cache retention", () => {
+  it("configures a TTL the Aviasales retention limit permits", () => {
+    // The CLI builds its cache through `aviasalesRetentionTtl`, which throws
+    // above 24h. Pinning the configured value here fails at test time rather
+    // than when someone runs a search with a raised TTL.
+    expect(() => aviasalesRetentionTtl(CACHE_TTL_MS)).not.toThrow();
+    expect(CACHE_TTL_MS).toBeLessThanOrEqual(AVIASALES_MAX_RETENTION_MS);
+  });
+
+  it("keeps the configured TTL well inside the limit rather than at it", () => {
+    // Sitting exactly on the ceiling would leave no room for the clock skew
+    // between storing a response and deriving an expiry from it.
+    expect(CACHE_TTL_MS).toBeLessThan(AVIASALES_MAX_RETENTION_MS);
   });
 });
