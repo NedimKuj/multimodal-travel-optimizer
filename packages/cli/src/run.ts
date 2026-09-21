@@ -11,6 +11,7 @@ import {
 import { loadReferenceData, SnapshotUnavailableError } from "@travel-optimizer/geo";
 import { runFlightSearch } from "@travel-optimizer/optimizer";
 import {
+  aviasalesRetentionTtl,
   createAviasalesFlightProvider,
   createFileResponseCache,
   loadAviasalesConfig,
@@ -26,6 +27,11 @@ import { formatSearch } from "./format.js";
 
 /** Cached provider responses live here, outside version control. */
 const CACHE_DIRECTORY = ".cache/providers";
+/**
+ * One hour, well inside the provider's 24-hour ceiling. The ceiling is enforced
+ * by `aviasalesRetentionTtl` where the cache is built, so raising this beyond
+ * what the provider permits fails loudly instead of shipping.
+ */
 const CACHE_TTL_MS = 60 * 60 * 1000;
 
 export interface CliIo {
@@ -147,7 +153,10 @@ export async function run(
     createAviasalesFlightProvider({
       config: configResult.config,
       airports: referenceData.airports,
-      cache: createFileResponseCache(resolve(io.cwd, CACHE_DIRECTORY), CACHE_TTL_MS),
+      cache: createFileResponseCache(
+        resolve(io.cwd, CACHE_DIRECTORY),
+        aviasalesRetentionTtl(CACHE_TTL_MS),
+      ),
     });
 
   const trace = await runFlightSearch(
