@@ -19,6 +19,7 @@ import {
 } from "@travel-optimizer/domain";
 
 import type { AviasalesPriceRecord } from "./dto.js";
+import { aviasalesExpiryFor } from "./retention.js";
 
 /*
  * Normalizes Aviasales price records into domain segments and offers.
@@ -228,10 +229,14 @@ export function mapPriceRecord(
     provenance: {
       provider: AVIASALES_PROVIDER_ID,
       ...(link !== undefined && { providerReference: link }),
-      // Cached fares with no expiry of their own (ADR 0006 §1).
+      // Always `cached`: this endpoint serves fares observed earlier, and a
+      // derived expiry below does not make one fresher (ADR 0006 §1).
       sourceType: "cached",
       fetchedAt: options.fetchedAt,
-      ...(record.expires_at !== undefined && { expiresAt: record.expires_at }),
+      // A provider-stated expiry always wins. Where the provider gives none —
+      // which `v3/prices_for_dates` never does — the 24-hour retention limit
+      // supplies the boundary, so a price is never usable indefinitely.
+      expiresAt: record.expires_at ?? aviasalesExpiryFor(options.fetchedAt),
     },
     ...(bookingUrl(record, options) !== undefined && { bookingUrl: bookingUrl(record, options) }),
   };

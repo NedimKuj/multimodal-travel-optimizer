@@ -306,6 +306,26 @@ describe("AviasalesFlightProvider", () => {
     const replayed = second.data.offers[0]?.provenance;
     expect(replayed?.fetchedAt).toBe("2026-09-18T09:00:00.000Z");
     expect(replayed?.fetchedAt).toBe(first.data.offers[0]?.provenance.fetchedAt);
+    // Exactly 24h from the original fetch — not 24h plus the cache TTL.
+    expect(replayed?.expiresAt).toBe("2026-09-19T09:00:00.000Z");
+  });
+
+  it("gives every offer from one response the same fetch basis", async () => {
+    const provider = createAviasalesFlightProvider({
+      config: config(),
+      airports,
+      fetchImpl: stubFetch(pricesForDatesBody([ONE_WAY_RECORD, ROUND_TRIP_RECORD])),
+      now: () => new Date("2026-09-18T09:00:00Z"),
+    });
+    const result = await provider.search(december);
+    if (result.status === "failed") throw new Error("expected data");
+
+    expect(result.data.offers.length).toBeGreaterThan(1);
+    for (const offer of result.data.offers) {
+      expect(offer.provenance.fetchedAt).toBe("2026-09-18T09:00:00.000Z");
+      expect(offer.provenance.expiresAt).toBe("2026-09-19T09:00:00.000Z");
+      expect(offer.provenance.sourceType).toBe("cached");
+    }
   });
 
   it("refuses a query that would exceed the call budget rather than truncating it", async () => {

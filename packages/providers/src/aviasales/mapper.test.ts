@@ -83,14 +83,19 @@ describe("mapPriceRecord — one-way", () => {
     expect(segments[0]?.durationMinutes).toBe(85);
   });
 
-  it("labels the price cached with our fetch time and no expiry", () => {
+  it("labels the price cached with our fetch time", () => {
     const { offer } = expectMapped(mapPriceRecord(ONE_WAY_RECORD, options()));
     expect(offer.provenance).toMatchObject({
       provider: "aviasales",
       sourceType: "cached",
       fetchedAt: "2026-09-18T09:00:00.000Z",
     });
-    expect(offer.provenance.expiresAt).toBeUndefined();
+  });
+
+  it("derives an expiry 24 hours after the fetch when the provider gives none", () => {
+    const { offer } = expectMapped(mapPriceRecord(ONE_WAY_RECORD, options()));
+    expect(ONE_WAY_RECORD.expires_at).toBeUndefined();
+    expect(offer.provenance.expiresAt).toBe("2026-09-19T09:00:00.000Z");
   });
 
   it("uses the provider's expiry when one is supplied", () => {
@@ -98,6 +103,25 @@ describe("mapPriceRecord — one-way", () => {
       mapPriceRecord({ ...ONE_WAY_RECORD, expires_at: "2026-09-18T10:00:00Z" }, options()),
     );
     expect(offer.provenance.expiresAt).toBe("2026-09-18T10:00:00.000Z");
+  });
+
+  it("never replaces a provider expiry with the longer derived one", () => {
+    // The provider's hour beats our 24, and a provider expiry beyond 24 hours
+    // is still honoured: it states validity, we only cap our own retention.
+    const shorter = expectMapped(
+      mapPriceRecord({ ...ONE_WAY_RECORD, expires_at: "2026-09-18T10:00:00Z" }, options()),
+    );
+    const longer = expectMapped(
+      mapPriceRecord({ ...ONE_WAY_RECORD, expires_at: "2026-09-21T09:00:00Z" }, options()),
+    );
+    expect(shorter.offer.provenance.expiresAt).toBe("2026-09-18T10:00:00.000Z");
+    expect(longer.offer.provenance.expiresAt).toBe("2026-09-21T09:00:00.000Z");
+  });
+
+  it("stays cached despite carrying an expiry, and is never called live", () => {
+    const { offer } = expectMapped(mapPriceRecord(ONE_WAY_RECORD, options()));
+    expect(offer.provenance.sourceType).toBe("cached");
+    expect(offer.provenance.expiresAt).toBeDefined();
   });
 
   it("prices per traveler, since the API has no passenger parameter", () => {
