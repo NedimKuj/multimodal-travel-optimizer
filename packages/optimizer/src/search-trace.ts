@@ -15,6 +15,7 @@ import { priceDestinations } from "./accommodation-search.js";
 import type { Shortlist } from "./accommodation-shortlist.js";
 import { createAccommodationBudget, type AccommodationSearchBudget } from "./budget.js";
 import { exploreComposedItineraries } from "./composed-search.js";
+import { pruneDominated, type PruningRecord } from "./dominance.js";
 import {
   exploreFlights,
   type DestinationResult,
@@ -84,6 +85,8 @@ export interface SearchTrace {
   readonly provider: SearchProviderRecord;
   readonly counts: ExplorationCounts;
   readonly destinations: readonly DestinationResult[];
+  /** Redundant candidates removed before accommodation was priced (ADR 0017). */
+  readonly pruning?: PruningRecord;
   /** How accommodation was priced, when the search got that far (ADR 0016). */
   readonly accommodation?: AccommodationRecord;
   readonly issues: readonly DomainIssue[];
@@ -194,8 +197,12 @@ export async function runFlightSearch(
       });
   const flightsCompletedAt = parseUtcInstant(now().toISOString());
 
+  // Spec §15 step 8 before step 9: thinning redundant candidates first means
+  // the accommodation shortlist is chosen from what is actually distinct.
+  const pruned = pruneDominated(exploration.destinations);
+
   const accommodationBudget = createAccommodationBudget(options.accommodationCalls ?? 0);
-  const priced = await priceDestinations(exploration.destinations, {
+  const priced = await priceDestinations(pruned.destinations, {
     request,
     shortlistLimit: options.accommodationShortlist ?? DEFAULT_ACCOMMODATION_SHORTLIST,
     budget: accommodationBudget,
@@ -237,6 +244,7 @@ export async function runFlightSearch(
       ...(exploration.providerMetrics !== undefined && { metrics: exploration.providerMetrics }),
     },
     counts: exploration.counts,
+    pruning: pruned.counts,
     destinations: priced.destinations,
     accommodation: accommodationRecord(priced, options.accommodationProvider, accommodationBudget),
     issues: [...exploration.issues, ...priced.issues],
