@@ -180,28 +180,38 @@ Maximum cache age for Data API results: 24 hours
 Two distinct mechanisms are in scope, and both must respect it:
 
 1. **Response cache** — `createFileResponseCache` / `createInMemoryResponseCache`
-   (`packages/providers/src/cache.ts`), currently driven by `CACHE_TTL_MS` in
-   `packages/cli/src/run.ts`, presently **1 hour**. Already inside the 24h
-   ceiling; compliant today, and must never be raised above 24h.
-2. **Offer provenance** — `expiresAt` on each `TransportOffer`.
+   (`packages/providers/src/cache.ts`), driven by `CACHE_TTL_MS` in
+   `packages/cli/src/run.ts`, presently **1 hour**. Inside the 24h ceiling, and
+   now checked against it at the point the cache is constructed.
+2. **Offer provenance** — `expiresAt` on each `TransportOffer`, derived below.
 
-### Provenance mapping (NOT YET IMPLEMENTED)
+Neither bounds the **upstream age of the fare**. The endpoint serves fares
+observed in the last 48 hours, and the response carries no field stating when a
+fare was found, so upstream age is **unknown and is not invented**.
 
-The provider's instruction to avoid expired prices cannot currently be honoured
-literally: `v3/prices_for_dates` **does not return `expires_at`**, so
-`packages/providers/src/aviasales/mapper.ts` leaves `expiresAt` absent on every
-offer. The 24-hour rule supplies the missing boundary.
+### Provenance mapping (IMPLEMENTED 2026-09-21)
+
+The provider's instruction to avoid expired prices cannot be honoured literally:
+`v3/prices_for_dates` **does not return `expires_at`**. The 24-hour rule supplies
+the missing boundary.
 
 ```text
 expiresAt = fetchedAt + 24h        (when the provider gives no expires_at)
 ```
 
 Where the provider *does* return `expires_at` (legacy endpoints), that value
-continues to win — a provider-stated expiry is always preferred to a derived one.
+wins — a provider-stated expiry is always preferred to a derived one, whether it
+is shorter or longer, because it states validity while ours caps retention.
 
-**Not implemented.** Recorded here as the agreed mapping only. Until it is
-implemented, Aviasales offers carry no `expiresAt` and the CLI correctly reports
-them as having no expiry.
+Implemented in `packages/providers/src/aviasales/retention.ts`
+(`AVIASALES_MAX_RETENTION_MS`, `aviasalesRetentionTtl`, `aviasalesExpiryFor`) and
+applied in `mapper.ts`. `aviasalesRetentionTtl` **throws** rather than clamping,
+and the CLI builds its response cache through it, so a TTL above 24 hours fails
+loudly instead of shipping.
+
+**A replayed cache entry is dated from when it was stored**, not when it was
+replayed. Stamping replay time onto an older response would report data as newer
+than it is and would push effective retention past 24 hours by the cache TTL.
 
 **Freshness caveat that the 24h rule does not solve.** The endpoint returns fares
 found in the **last 48 hours**, so data may already be up to 48h old on arrival.
