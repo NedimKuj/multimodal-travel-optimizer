@@ -774,19 +774,54 @@ The source and age of the price data must be retained.
 
 ## 17. Candidate Pruning
 
-Dominance pruning should eliminate candidates that are strictly worse than another candidate.
+Dominance pruning removes candidates that are redundant: strictly worse than
+another candidate offering **the same thing**. It is a redundancy boundary, not
+a ranking preference (`docs/decisions/0017-dominance-pruning.md`).
 
-Candidate A dominates candidate B when:
+### What may be compared
 
-- A costs no more than B, within the same cost scope
+Two candidates are comparable for dominance only when all of these match:
+
+```text
+destination                 a cheaper Rome must not eliminate Milan
+transport pattern           a round trip must not eliminate a multi-city trip
+comparison class            §19: amounts of different scope are never compared
+cost scope                  the same, by construction, as the class
+accommodation coverage      the same multiset of stay states
+```
+
+Destination discovery and trip-shape diversity are **product outputs**, not
+search by-products. Dominance may remove an alternative route to one place in
+one shape; it may never remove a place or a shape.
+
+The coverage requirement exists because `cost.total` sums priced components
+only. Two candidates in the same class can differ in *how much* accommodation is
+priced, and comparing their totals would let the one with **less** known cost
+appear cheaper and eliminate the one with more. Different accommodation
+*amounts* are fine — that is what the cost dimension is for. Different
+*completeness* is not comparable at all.
+
+### The dimensions
+
+Within a comparable pair, A dominates B when:
+
+- A costs no more than B
 - A takes no longer than B
 - A has no more changes than B (`stops + connections`, see
   `docs/decisions/0005-trip-metrics-and-accommodation-coverage.md`)
-- and A is strictly better in at least one dimension
+- and at least one of the three is strictly better
 
-Dominated candidate B may be discarded.
+**Nights are deliberately not a dimension.** Two trips of different length are
+not interchangeable: duration is product intent, and it affects what
+accommodation is worth. The requested `[minNights, maxNights]` already bounds
+what is acceptable.
 
-The exact dominance dimensions may evolve as the optimizer gains additional objectives.
+Candidates equal on all three dimensions do not dominate one another, and both
+survive — existing tie-breaking decides their order, and neither is deleted.
+
+Dominance is a strict partial order, so the surviving set is the set of maximal
+elements and does not depend on the order candidates arrive in. Pruning is pure:
+no provider calls, no side effects.
 
 Do not use an opaque score as the sole mechanism for pruning.
 

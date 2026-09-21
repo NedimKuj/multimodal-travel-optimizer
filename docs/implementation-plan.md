@@ -2239,11 +2239,41 @@ transport behaviour is unchanged, and no adapter has been added.
 
 ---
 
-## Phase 5 — Optimization
+## Phase 5 — Dominance pruning
 
-Add:
+Remove candidates that are redundant: strictly worse than another candidate
+offering the same destination, in the same trip shape, at the same pricing
+completeness (`docs/decisions/0017-dominance-pruning.md`).
 
-- dominance pruning
+```text
+comparable when   destination · transport pattern · comparison class
+                  · cost scope · accommodation coverage profile all match
+dominated when    cost, travel time and stops+connections are all no better
+                  and at least one is strictly worse
+```
+
+Dominance is a **redundancy boundary, not a ranking preference**. It may thin
+the routes to one place in one shape; it may never remove a place or a shape,
+because destination discovery and trip-shape diversity are product outputs.
+
+Nights are deliberately excluded: two trips of different length are not
+interchangeable, and `[minNights, maxNights]` already bounds what is acceptable.
+
+Pruning is pure and order-independent — the relation is a strict partial order,
+so the survivors are its maximal elements whatever order candidates arrive in.
+It runs before accommodation is searched (spec §15 step 8 precedes step 9), and
+its counts reconcile exactly: `entered = pruned + remaining`, reported apart
+from every other reduction.
+
+Expect it to fire rarely while results stay as sparse as they are (2–3 live
+candidates). It is correct rather than impactful, and the counts say so.
+
+---
+
+## Phase 5b — Further optimization
+
+Deferred:
+
 - budget constraints
 - duration constraints
 - transfer penalties
