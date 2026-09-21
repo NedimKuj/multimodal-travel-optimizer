@@ -209,9 +209,17 @@ describe("one-way", () => {
     );
   });
 
+  it("composes from one-way fares, which is all a one-way can be", () => {
+    expect(parsed(oneWay).compose).toBe(true);
+    // Still not an open jaw or a multi-city trip: those are separate choices.
+    expect(parsed(oneWay).openJaw).toBe(false);
+    expect(parsed(oneWay).multiCity).toBe(false);
+  });
+
   it("leaves round trips exactly as they were", () => {
     const options = parsed(base);
     expect(options.to).toBe("2027-01-03");
     expect(options.endDate).toBeUndefined();
+    expect(options.compose).toBe(false);
   });
 });

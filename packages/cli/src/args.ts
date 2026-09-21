@@ -285,9 +285,14 @@ export function parseArguments(argv: readonly string[]): ParseArgumentsResult {
       currency: resolvedCurrency,
       alternativeAirports: values["alternative-airports"],
       openJaw: values["open-jaw"],
-      // Neither an open jaw nor a second city can be built from round-trip
-      // fares, so both imply composition from one-way fares.
-      compose: values.compose || values["open-jaw"] || values["multi-city"],
+      // None of these can be built from the provider's round-trip fares, so
+      // each implies composition from one-way fares. A one-way most of all:
+      // its whole itinerary is a single one-way fare.
+      compose:
+        values.compose ||
+        values["open-jaw"] ||
+        values["multi-city"] ||
+        values["one-way"] !== undefined,
       multiCity: values["multi-city"],
       limit,
       json: values.json,
