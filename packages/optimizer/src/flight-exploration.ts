@@ -223,6 +223,9 @@ export function callsPerOrigin(window: TravelWindow): number {
     return list;
   };
   const departures = months(window.departure.from, window.departure.to);
+  // A one-way asks one question per departure month; there is no return month
+  // to pair it with.
+  if (window.return === undefined) return departures.length;
   const returns = months(window.return.from, window.return.to);
   return departures.reduce(
     (total, departure) => total + returns.filter((entry) => entry >= departure).length,
@@ -241,8 +244,9 @@ function buildQuery(
     destinations: request.destination === null ? "anywhere" : [request.destination],
     departureDates: window.departure,
     // This path searches the provider's own round-trip fares (ADR 0008);
-    // composing one-way fares is `composed-search.ts`.
-    returnDates: window.return,
+    // composing one-way fares is `composed-search.ts`. A one-way request omits
+    // the return dates entirely, which the adapter reads as a one-way search.
+    ...(window.return !== undefined && { returnDates: window.return }),
     travelers: request.travelers,
     currency,
   };

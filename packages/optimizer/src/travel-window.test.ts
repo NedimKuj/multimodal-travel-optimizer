@@ -287,3 +287,119 @@ describe("evaluateTrip — a night in every city", () => {
     });
   });
 });
+
+describe("resolveTravelWindow — one-way", () => {
+  const oneWay = (overrides: Record<string, unknown> = {}) =>
+    resolved({
+      returnDate: undefined,
+      endDate: "2027-01-03",
+      minNights: undefined,
+      maxNights: undefined,
+      flexibilityDays: 0,
+      ...overrides,
+    });
+
+  it("has no return range, because there is no return", () => {
+    const window = oneWay();
+    expect(window.kind).toBe("one_way");
+    expect(window.return).toBeUndefined();
+    expect(window.endDate).toBe("2027-01-03");
+  });
+
+  it("bounds the trip by the declared end", () => {
+    expect(oneWay().outerBounds).toEqual({ from: "2026-12-26", to: "2027-01-03" });
+  });
+
+  it("flexes the departure but never the end", () => {
+    // The end is what the traveler asked for. Widening it would book nights
+    // past the boundary they set.
+    const window = oneWay({ flexibilityDays: 2 });
+    expect(window.departure).toEqual({ from: "2026-12-24", to: "2026-12-28" });
+    expect(window.endDate).toBe("2027-01-03");
+    expect(window.outerBounds.to).toBe("2027-01-03");
+  });
+
+  it("never lets a flexed departure run past the end", () => {
+    const window = oneWay({ departureDate: "2027-01-02", flexibilityDays: 5 });
+    expect(window.departure.to).toBe("2027-01-03");
+  });
+
+  it("leaves the inverted case to the request model, which already rejects it", () => {
+    // A departure after the end never reaches the window: normalization stops
+    // it, and flexing only moves the earliest departure earlier.
+    const result = normalizeSearchRequest({
+      origin: "SJJ",
+      destination: null,
+      departureDate: "2027-01-10",
+      endDate: "2027-01-03",
+      flexibilityDays: 0,
+      travelers: 2,
+      transportModes: ["flight"],
+      allowOpenJaw: false,
+      allowMultiCity: false,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected an issue");
+    expect(result.issues.map((issue) => issue.code)).toContain("DEPARTURE_AFTER_END");
+  });
+
+  it("requires a departure and one of the two ends", () => {
+    const result = resolveTravelWindow(
+      request({ departureDate: undefined, returnDate: undefined, flexibilityDays: 0 }),
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected an issue");
+    expect(result.issues[0]?.code).toBe("DATES_REQUIRED");
+  });
+
+  it("leaves round-trip windows exactly as they were", () => {
+    const window = resolved();
+    expect(window.kind).toBe("round_trip");
+    expect(window.return).toEqual({ from: "2026-12-29", to: "2027-01-05" });
+    expect(window.endDate).toBeUndefined();
+  });
+});
+
+describe("evaluateTrip — one-way", () => {
+  const window = (() => {
+    const result = resolveTravelWindow(
+      request({
+        departureDate: "2026-12-26",
+        returnDate: undefined,
+        endDate: "2027-01-03",
+        minNights: undefined,
+        maxNights: undefined,
+        flexibilityDays: 2,
+      }),
+    );
+    if (!result.ok) throw new Error("expected a window");
+    return result.window;
+  })();
+
+  it("accepts a trip that departs in range and ends at the boundary", () => {
+    const dates = {
+      tripStart: parseLocalDate("2026-12-27"),
+      tripEnd: parseLocalDate("2027-01-03"),
+      stays: [stay("2026-12-27", "2027-01-03")],
+    };
+    expect(evaluateTrip(window, dates)).toMatchObject({ ok: true, nights: 7 });
+  });
+
+  it("rejects a departure outside the flexed range", () => {
+    const dates = {
+      tripStart: parseLocalDate("2026-12-20"),
+      tripEnd: parseLocalDate("2027-01-03"),
+      stays: [stay("2026-12-20", "2027-01-03")],
+    };
+    expect(evaluateTrip(window, dates)).toEqual({ ok: false, reason: "outside_window" });
+  });
+
+  it("rejects a stay running past the declared end", () => {
+    const dates = {
+      tripStart: parseLocalDate("2026-12-27"),
+      tripEnd: parseLocalDate("2027-01-05"),
+      stays: [stay("2026-12-27", "2027-01-05")],
+    };
+    expect(evaluateTrip(window, dates)).toEqual({ ok: false, reason: "outside_window" });
+  });
+});

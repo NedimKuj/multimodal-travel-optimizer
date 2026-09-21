@@ -267,7 +267,10 @@ export async function discoverOneWayLegs(
   const secondCityAirportsSeen = new Set<string>();
   const secondCityAirportsAdmitted = new Set<string>();
 
-  const returnCallCost = costOfQuery(options.window.return);
+  // A one-way needs no way home: stage 1's fares are already whole trips, so
+  // stages 2 and 3 have nothing to ask about (ADR 0018).
+  const returnWindow = options.window.return;
+  const returnCallCost = returnWindow === undefined ? 0 : costOfQuery(returnWindow);
   // An onward leg may depart any time the traveler is away, so it is priced
   // against the whole window rather than the return range alone.
   const onwardCallCost = costOfQuery(options.window.outerBounds);
@@ -316,7 +319,7 @@ export async function discoverOneWayLegs(
       {
         origins: [code],
         destinations: [homeCode],
-        departureDates: options.window.return,
+        departureDates: returnWindow ?? options.window.departure,
         travelers: options.travelers,
         currency: options.currency,
       },
@@ -401,10 +404,14 @@ export async function discoverOneWayLegs(
   // Only where the return candidates come from has changed: a growing pool fed
   // by both stages, rather than stage 1 alone (ADR 0015 §7).
   const stageOne = shortlist.map(directCandidate);
-  for (const candidate of stageOne) pool.offer(candidate);
+  // Nothing enters the pool for a one-way: there is no way home to look for.
+  if (returnWindow !== undefined) {
+    for (const candidate of stageOne) pool.offer(candidate);
+  }
   // Onward discovery starts only from stage-1 destinations, which fixes the
   // depth of a trip at SJJ -> A -> B -> SJJ rather than opening a traversal.
-  const onwardQueue = options.multiCity === true ? [...stageOne] : [];
+  const onwardQueue =
+    options.multiCity === true && returnWindow !== undefined ? [...stageOne] : [];
 
   let guaranteed = Math.min(
     options.guaranteedReturnQueries ?? GUARANTEED_RETURN_QUERIES,
