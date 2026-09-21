@@ -21,7 +21,18 @@ export type SourceType = (typeof SOURCE_TYPES)[number];
 
 export const sourceTypeSchema = z.enum(SOURCE_TYPES);
 
-/** Where a price came from and how fresh it is. */
+/**
+ * Where a price came from and how fresh it is.
+ *
+ * `fetchedAt` is when we obtained the provider's response — not when the
+ * provider observed the fare, which some sources never tell us.
+ *
+ * `expiresAt` is the point beyond which the price may no longer be used. That
+ * is either the provider's own stated validity or, where a provider caps how
+ * long its data may be retained, the boundary that cap implies. It bounds our
+ * use of the price; it is not a promise that the underlying fare is still
+ * purchasable, and an adapter must never infer a stronger `sourceType` from it.
+ */
 export const priceProvenanceSchema = z
   .object({
     provider: z.string().min(1),
@@ -57,7 +68,7 @@ export function weakestSourceType(types: readonly SourceType[]): SourceType | un
 export type Freshness = "fresh" | "expired" | "unknown";
 
 /**
- * Whether a price is still within its provider-declared validity at `now`.
+ * Whether a price is still within its permitted-use boundary at `now`.
  * Without an `expiresAt`, freshness is unknown, not assumed fresh.
  */
 export function priceFreshness(provenance: PriceProvenance, now: UtcInstant): Freshness {
