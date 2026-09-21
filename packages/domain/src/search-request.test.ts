@@ -162,3 +162,57 @@ describe("budgetTotal", () => {
     );
   });
 });
+
+describe("one-way requests", () => {
+  const oneWay = (overrides: Record<string, unknown> = {}) =>
+    normalizeSearchRequest({ ...sarajevoNewYear, returnDate: undefined, endDate: "2027-01-03", ...overrides });
+
+  it("accepts a departure with an explicit end", () => {
+    const result = oneWay();
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.request.endDate).toBe("2027-01-03");
+    expect(result.request.returnDate).toBeUndefined();
+  });
+
+  it("refuses a return and an end together", () => {
+    // Two answers to one question: which is the trip's end?
+    const result = normalizeSearchRequest({ ...sarajevoNewYear, endDate: "2027-01-05" });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.issues.map((issue) => issue.code)).toContain("RETURN_AND_END_DATE");
+  });
+
+  it("refuses an end with nowhere to start", () => {
+    const result = oneWay({ departureDate: undefined });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.issues.map((issue) => issue.code)).toContain("END_DATE_WITHOUT_DEPARTURE");
+  });
+
+  it("refuses an end before the departure", () => {
+    const result = oneWay({ departureDate: "2027-01-03", endDate: "2026-12-26" });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.issues.map((issue) => issue.code)).toContain("DEPARTURE_AFTER_END");
+  });
+
+  it("accepts a same-day end, which is a trip with no nights", () => {
+    expect(oneWay({ departureDate: "2026-12-26", endDate: "2026-12-26" }).ok).toBe(true);
+  });
+
+  it("allows flexibility against an end alone", () => {
+    const result = oneWay({ departureDate: undefined, endDate: "2027-01-03", flexibilityDays: 2 });
+    // Rejected for having no departure, not for the flexibility.
+    if (result.ok) throw new Error("expected an issue");
+    expect(result.issues.map((issue) => issue.code)).not.toContain("FLEXIBILITY_WITHOUT_DATES");
+  });
+
+  it("leaves round trips exactly as they were", () => {
+    const result = normalizeSearchRequest(sarajevoNewYear);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.request.returnDate).toBe("2027-01-03");
+    expect(result.request.endDate).toBeUndefined();
+  });
+});

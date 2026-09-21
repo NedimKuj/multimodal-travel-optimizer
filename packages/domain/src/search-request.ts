@@ -26,7 +26,16 @@ export const searchRequestInputSchema = z.object({
   /** `null` or absent means "anywhere". */
   destination: z.string().trim().min(1).nullable().optional(),
   departureDate: localDateSchema.optional(),
+  /** When the trip returns. A round trip has this; a one-way has `endDate`. */
   returnDate: localDateSchema.optional(),
+  /**
+   * When a one-way trip ends: the explicit checkout boundary.
+   *
+   * A one-way itinerary has no closing departure to bound its time on the
+   * ground, so the traveler states where it ends. Never both this and
+   * `returnDate`: they answer the same question for different trip shapes.
+   */
+  endDate: localDateSchema.optional(),
   flexibilityDays: z.number().int().nonnegative().optional(),
   minNights: z.number().int().positive().optional(),
   maxNights: z.number().int().positive().optional(),
@@ -55,6 +64,8 @@ export interface SearchRequest {
   readonly destination: string | null;
   readonly departureDate?: LocalDate;
   readonly returnDate?: LocalDate;
+  /** The explicit end of a one-way trip; mutually exclusive with `returnDate`. */
+  readonly endDate?: LocalDate;
   readonly flexibilityDays: number;
   readonly minNights?: number;
   readonly maxNights?: number;
@@ -94,15 +105,39 @@ export function normalizeSearchRequest(input: unknown): NormalizeSearchRequestRe
       message: `departureDate ${raw.departureDate} is after returnDate ${raw.returnDate}`,
     });
   }
+  if (raw.returnDate !== undefined && raw.endDate !== undefined) {
+    issues.push({
+      code: "RETURN_AND_END_DATE",
+      message:
+        "returnDate and endDate both set; a round trip ends at its return, a one-way at its endDate",
+    });
+  }
+  if (raw.endDate !== undefined && raw.departureDate === undefined) {
+    issues.push({
+      code: "END_DATE_WITHOUT_DEPARTURE",
+      message: "endDate requires departureDate: a one-way trip needs somewhere to start",
+    });
+  }
+  if (
+    raw.departureDate !== undefined &&
+    raw.endDate !== undefined &&
+    compareLocalDates(raw.departureDate, raw.endDate) > 0
+  ) {
+    issues.push({
+      code: "DEPARTURE_AFTER_END",
+      message: `departureDate ${raw.departureDate} is after endDate ${raw.endDate}`,
+    });
+  }
   if (
     raw.flexibilityDays !== undefined &&
     raw.flexibilityDays > 0 &&
     raw.departureDate === undefined &&
-    raw.returnDate === undefined
+    raw.returnDate === undefined &&
+    raw.endDate === undefined
   ) {
     issues.push({
       code: "FLEXIBILITY_WITHOUT_DATES",
-      message: "flexibilityDays requires departureDate or returnDate",
+      message: "flexibilityDays requires departureDate, returnDate or endDate",
     });
   }
   if (raw.minNights !== undefined && raw.maxNights !== undefined && raw.minNights > raw.maxNights) {
@@ -127,6 +162,7 @@ export function normalizeSearchRequest(input: unknown): NormalizeSearchRequestRe
       destination: raw.destination ?? null,
       ...(raw.departureDate !== undefined && { departureDate: raw.departureDate }),
       ...(raw.returnDate !== undefined && { returnDate: raw.returnDate }),
+      ...(raw.endDate !== undefined && { endDate: raw.endDate }),
       flexibilityDays: raw.flexibilityDays ?? 0,
       ...(raw.minNights !== undefined && { minNights: raw.minNights }),
       ...(raw.maxNights !== undefined && { maxNights: raw.maxNights }),
