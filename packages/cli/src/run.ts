@@ -60,7 +60,8 @@ function toSearchRequestInput(options: CliOptions): Record<string, unknown> {
     origin: options.origin,
     destination: options.destination,
     departureDate: options.from,
-    returnDate: options.to,
+    ...(options.to !== undefined && { returnDate: options.to }),
+    ...(options.endDate !== undefined && { endDate: options.endDate }),
     flexibilityDays: options.flexibilityDays,
     ...(options.nights !== undefined && {
       minNights: options.nights.min,

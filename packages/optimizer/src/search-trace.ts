@@ -181,8 +181,13 @@ export async function runFlightSearch(
   const startedAt = parseUtcInstant(now().toISOString());
   // Open jaw needs one-way fares, so it implies composition; composition is
   // also useful on its own, for the destinations round-trip fares never reach.
+  // A one-way has no round-trip fare to find, so it is always composed from
+  // one-way fares — which is what the discovery stage already returns.
   const strategy: SearchStrategy =
-    options.strategy ?? (request.allowOpenJaw ? "composed" : "provider_round_trips");
+    options.strategy ??
+    (request.allowOpenJaw || request.endDate !== undefined
+      ? "composed"
+      : "provider_round_trips");
   const exploration =
     strategy === "composed"
     ? await exploreComposedItineraries(request, deps, {

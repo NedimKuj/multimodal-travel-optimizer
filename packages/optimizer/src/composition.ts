@@ -149,6 +149,34 @@ export function composeItineraries(input: ComposeInput): CompositionResult {
     if (outcome.issue !== undefined) issues.push(outcome.issue);
   };
 
+  // A one-way trip is its outbound and nothing else: there is no way home to
+  // pair it with, so each fare is already a whole itinerary (ADR 0018).
+  const endsAt = input.window.endDate;
+  if (endsAt !== undefined) {
+    for (const arrivalId of [...outboundByAirport.keys()].sort()) {
+      const outbounds = rankLegs(
+        outboundByAirport.get(arrivalId) ?? [],
+        config.maxOffersPerAirport,
+      );
+      for (const outbound of outbounds) {
+        record(
+          assembleCandidate({
+            id: `trip:${outbound.offer.id}`,
+            legs: [outbound.segment],
+            offers: [outbound.offer],
+            request: input.request,
+            window: input.window,
+            context: input.context,
+            stayRules: { minNightsPerStay: config.minNightsPerCity },
+            endsAt,
+          }),
+          1,
+        );
+      }
+    }
+    return { attempts, counts, issues };
+  }
+
   const arrivalAirports = [...outboundByAirport.keys()].sort();
   for (const arrivalId of arrivalAirports) {
     const outbounds = rankLegs(outboundByAirport.get(arrivalId) ?? [], config.maxOffersPerAirport);

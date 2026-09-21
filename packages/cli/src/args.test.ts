@@ -179,3 +179,39 @@ describe("parseArguments", () => {
     expect(result).toEqual({ ok: false, help: true });
   });
 });
+
+describe("one-way", () => {
+  const oneWay = ["--origin", "SJJ", "--from", "2026-12-26", "--one-way", "2027-01-03"];
+
+  it("accepts a departure and an end instead of a return", () => {
+    const options = parsed(oneWay);
+    expect(options.endDate).toBe("2027-01-03");
+    expect(options.to).toBeUndefined();
+  });
+
+  it("refuses a return and an end together", () => {
+    expect(issues([...base, "--one-way", "2027-01-05"])[0]).toContain("a trip returns or it ends");
+  });
+
+  it("still requires one of the two", () => {
+    expect(issues(["--origin", "SJJ", "--from", "2026-12-26"])[0]).toContain("--to is required");
+  });
+
+  it("rejects an end before the departure", () => {
+    expect(
+      issues(["--origin", "SJJ", "--from", "2027-01-03", "--one-way", "2026-12-26"])[0],
+    ).toContain("is after");
+  });
+
+  it("rejects a malformed end rather than falling back", () => {
+    expect(issues(["--origin", "SJJ", "--from", "2026-12-26", "--one-way", "soon"])[0]).toContain(
+      "--one-way",
+    );
+  });
+
+  it("leaves round trips exactly as they were", () => {
+    const options = parsed(base);
+    expect(options.to).toBe("2027-01-03");
+    expect(options.endDate).toBeUndefined();
+  });
+});

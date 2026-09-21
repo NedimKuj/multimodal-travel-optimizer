@@ -21,7 +21,10 @@ export interface CliOptions {
   readonly origin: string;
   readonly destination: string | null;
   readonly from: LocalDate;
-  readonly to: LocalDate;
+  /** The return date of a round trip; absent for a one-way. */
+  readonly to?: LocalDate;
+  /** The end of a one-way trip; absent for a round trip. */
+  readonly endDate?: LocalDate;
   readonly flexibilityDays: number;
   readonly nights?: { readonly min: number; readonly max: number };
   readonly travelers: number;
@@ -69,6 +72,9 @@ Optional:
   --open-jaw             Allow flying home from a different city (implies
                          --compose). The sector between the two cities is left
                          unpriced: its cost is excluded and the output says so.
+  --one-way <date>       A trip that does not come back, ending on this date
+                         (YYYY-MM-DD). Use instead of --to. The date is the
+                         checkout boundary and is never widened by --flex.
   --multi-city           Allow a second city on the way (implies --compose).
                          Each destination asked where it can go on to next
                          costs provider calls from the same budget as the ways
@@ -107,9 +113,12 @@ function parseDate(
   value: string | undefined,
   name: string,
   issues: DomainIssue[],
+  options: { readonly required?: boolean } = {},
 ): LocalDate | undefined {
   if (value === undefined) {
-    issues.push(issue("MISSING_ARGUMENT", `--${name} is required (YYYY-MM-DD)`));
+    if (options.required !== false) {
+      issues.push(issue("MISSING_ARGUMENT", `--${name} is required (YYYY-MM-DD)`));
+    }
     return undefined;
   }
   const parsed = localDateSchema.safeParse(value);
@@ -198,6 +207,7 @@ export function parseArguments(argv: readonly string[]): ParseArgumentsResult {
         "open-jaw": { type: "boolean", default: false },
         compose: { type: "boolean", default: false },
         "multi-city": { type: "boolean", default: false },
+        "one-way": { type: "string" },
         limit: { type: "string" },
         json: { type: "boolean", default: false },
         help: { type: "boolean", default: false },
@@ -229,7 +239,15 @@ export function parseArguments(argv: readonly string[]): ParseArgumentsResult {
   }
 
   const from = parseDate(values.from, "from", issues);
-  const to = parseDate(values.to, "to", issues);
+  const oneWayEnd = parseDate(values["one-way"], "one-way", issues, { required: false });
+  // A trip comes back or it does not. Asking for both leaves two answers to
+  // when it ends, so it is refused rather than one silently winning.
+  if (values.to !== undefined && values["one-way"] !== undefined) {
+    issues.push(
+      issue("INVALID_ARGUMENT", "--to and --one-way cannot both be given: a trip returns or it ends"),
+    );
+  }
+  const to = parseDate(values.to, "to", issues, { required: oneWayEnd === undefined });
   const nights = parseNights(values.nights, issues);
   const flexibilityDays = parseInteger(values.flex, "flex", 0, issues, { min: 0 });
   const travelers = parseInteger(values.people, "people", 1, issues);
@@ -239,8 +257,16 @@ export function parseArguments(argv: readonly string[]): ParseArgumentsResult {
   if (from !== undefined && to !== undefined && from > to) {
     issues.push(issue("INVALID_ARGUMENT", `--from ${from} is after --to ${to}`));
   }
+  if (from !== undefined && oneWayEnd !== undefined && from > oneWayEnd) {
+    issues.push(issue("INVALID_ARGUMENT", `--from ${from} is after --one-way ${oneWayEnd}`));
+  }
 
-  if (issues.length > 0 || origin === undefined || from === undefined || to === undefined) {
+  if (
+    issues.length > 0 ||
+    origin === undefined ||
+    from === undefined ||
+    (to === undefined && oneWayEnd === undefined)
+  ) {
     return { ok: false, issues };
   }
 
@@ -250,7 +276,8 @@ export function parseArguments(argv: readonly string[]): ParseArgumentsResult {
       origin: origin.toUpperCase(),
       destination: values.destination?.trim().toUpperCase() ?? null,
       from,
-      to,
+      ...(to !== undefined && { to }),
+      ...(oneWayEnd !== undefined && { endDate: oneWayEnd }),
       flexibilityDays,
       ...(nights !== undefined && { nights }),
       travelers,
