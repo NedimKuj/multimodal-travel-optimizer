@@ -18,3 +18,8 @@ packages/geo/data/*.json
 
 # Provider response cache
 .cache/
+
+# Next.js
+apps/web/.next/
+apps/web/out/
+apps/web/tsconfig.tsbuildinfo

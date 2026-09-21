@@ -7,7 +7,7 @@ const packageSource = (name: string): string =>
 
 export default defineConfig({
   test: {
-    include: ["packages/*/src/**/*.test.ts"],
+    include: ["packages/*/src/**/*.test.ts", "apps/web/src/**/*.test.ts"],
   },
   resolve: {
     // Tests run against workspace sources, not built dist output.

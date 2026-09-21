@@ -1,0 +1,52 @@
+@import "tailwindcss";
+
+:root {
+  --bg: #f3f0e8;
+  --bg-elevated: #fffdf8;
+  --ink: #1c1915;
+  --ink-muted: #5c554c;
+  --line: #d8d0c4;
+  --accent: #0f5c4c;
+  --accent-ink: #f4fff9;
+  --warn: #8a4b12;
+  --danger: #8b1e1e;
+  --estimate: #6b5a2e;
+  --focus: #1a6b5a;
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --sans: "IBM Plex Sans", "Segoe UI", sans-serif;
+  --display: "Fraunces", Georgia, serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background:
+    radial-gradient(ellipse 120% 80% at 10% -20%, #e4efe9 0%, transparent 55%),
+    radial-gradient(ellipse 90% 60% at 100% 0%, #efe6d6 0%, transparent 50%),
+    var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 15px;
+  line-height: 1.45;
+}
+
+a {
+  color: var(--accent);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
