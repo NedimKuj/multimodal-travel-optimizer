@@ -77,7 +77,9 @@ Last verified:
 Status:
 
 ```text
-Research / integration candidate
+CURRENT FLIGHT DISCOVERY PROVIDER
+Provisionally cleared for development use (2026-09-21).
+Not cleared for public launch — see "Remaining caveat".
 ```
 
 Intended use:
@@ -106,56 +108,187 @@ Provider:              Aviasales (Travelpayouts affiliate network)
 API:                   Flights Data API (aviasales/v3/*, legacy v1/v2)
 Purpose:               cached flight price discovery
 Environment:           production endpoints only (no sandbox known)
-Access status:         API token held locally; program eligibility UNVERIFIED
-Commercial use:        UNVERIFIED
-Caching allowed:       UNVERIFIED
-Redistribution:        UNVERIFIED — assume not allowed
-Attribution required:  UNVERIFIED — affiliate marker assumed required for links
-Booking/deep links:    redirect only, via affiliate link with marker
-Rate limits:           UNVERIFIED for Data API
-Data freshness:        cached fares from recent user searches; treat as `cached`
-Last verified:         2026-09-18 (attempted; see below)
+Access status:         PROVISIONALLY VERIFIED — registration with Travelpayouts,
+                       connection to the Aviasales program, and an API token are
+                       all required, and are the only stated prerequisites
+Commercial use:        PROVISIONALLY VERIFIED — permitted for public-facing
+                       commercial travel discovery
+Caching allowed:       PROVISIONALLY VERIFIED — required to cache for 24 hours
+Redistribution:        PROVISIONALLY VERIFIED — display of prices to end users
+                       permitted as part of discovery results
+Attribution required:  PROVISIONALLY VERIFIED — less restrictive for Data API
+                       than for Search API; exact wording/placement UNVERIFIED
+Booking/deep links:    redirect only, via affiliate link with marker.
+                       Booking is NOT required; discovery-only is permitted
+Rate limits:           VERIFIED — 600 rpm for /v3/prices_for_dates
+Data freshness:        cached fares from recent user searches; treat as `cached`.
+                       Provider retains 7 days; endpoint returns fares found in
+                       the last 48h; our cache must not exceed 24h
+Last verified:         2026-09-21 (Aviasales AI agent response; see below)
 ```
 
-### Why these are unverified
+### Evidence — Aviasales AI agent response, 2026-09-21
 
-Verification was attempted on 2026-09-18 from this repository. The Travelpayouts
-support centre (`support.travelpayouts.com`), which hosts both the affiliate
-agreement and the Data API reference, returns **HTTP 403 to automated
-requests**, and `api.travelpayouts.com/aviasales/v3/prices_for_dates` returns
-**401 without a token**. No terms text could therefore be read and confirmed
-here. Nothing above may be treated as approved until a human confirms it while
-signed in to the partner dashboard.
+The clarification below was obtained from the **Aviasales AI support agent** on
+**2026-09-21**, as reported by the project owner. Recorded verbatim as received:
+
+```text
+- Commercial public-facing travel discovery is permitted.
+- Registration with Travelpayouts and connection to Aviasales are required.
+- Use of an API token is required.
+- Data API results should be cached for 24 hours.
+- Expired prices should be avoided.
+- The stricter Search API rules do NOT apply to Data API output.
+- Attribution/display requirements are less restrictive for Data API usage.
+- The product can remain discovery-only; booking is not required.
+```
+
+**This is provider evidence, not a contract.** It was given by an automated
+support agent, not issued as written terms and not countersigned. It is strong
+enough to move these fields off UNVERIFIED and to govern implementation, and it
+is **not** strong enough to rely on at public launch. See *Remaining caveat*
+below.
+
+### Data API rules vs Search API rules
+
+The two APIs carry **different obligations**, and this distinction is now
+confirmed by the provider rather than inferred from documentation layout. It was
+previously recorded here as an open question; it is answered.
+
+| | **Data API** (what we use) | **Flight Search API** (not used) |
+|---|---|---|
+| Endpoint | `aviasales/v3/prices_for_dates` | real-time search |
+| User-initiated search required | **No** | Yes — *"each search query must be initiated by the user"* |
+| Conversion obligation | **None** | 9% Buy-link conversion floor |
+| Automated collection | **Permitted** | *"forbidden to automatically collect data from search results"* |
+| Rate limit | 600 rpm | 200 queries/hour per IP |
+| Attribution | Less restrictive (exact form UNVERIFIED) | Stricter |
+| Booking required | **No** | Conversion obligation applies |
+
+Our automated, non-user-initiated discovery funnel is therefore **not** governed
+by the Search API restrictions. Nothing in this table licenses use of the Search
+API; if that API is ever adopted, its stricter rules apply in full.
+
+### The 24-hour cache requirement
+
+**A concrete provider constraint, binding on implementation.**
+
+```text
+Maximum cache age for Data API results: 24 hours
+```
+
+Two distinct mechanisms are in scope, and both must respect it:
+
+1. **Response cache** — `createFileResponseCache` / `createInMemoryResponseCache`
+   (`packages/providers/src/cache.ts`), currently driven by `CACHE_TTL_MS` in
+   `packages/cli/src/run.ts`, presently **1 hour**. Already inside the 24h
+   ceiling; compliant today, and must never be raised above 24h.
+2. **Offer provenance** — `expiresAt` on each `TransportOffer`.
+
+### Provenance mapping (NOT YET IMPLEMENTED)
+
+The provider's instruction to avoid expired prices cannot currently be honoured
+literally: `v3/prices_for_dates` **does not return `expires_at`**, so
+`packages/providers/src/aviasales/mapper.ts` leaves `expiresAt` absent on every
+offer. The 24-hour rule supplies the missing boundary.
+
+```text
+expiresAt = fetchedAt + 24h        (when the provider gives no expires_at)
+```
+
+Where the provider *does* return `expires_at` (legacy endpoints), that value
+continues to win — a provider-stated expiry is always preferred to a derived one.
+
+**Not implemented.** Recorded here as the agreed mapping only. Until it is
+implemented, Aviasales offers carry no `expiresAt` and the CLI correctly reports
+them as having no expiry.
+
+**Freshness caveat that the 24h rule does not solve.** The endpoint returns fares
+found in the **last 48 hours**, so data may already be up to 48h old on arrival.
+A 24h cache on top means a displayed price can be up to **72 hours** old. The
+derived `expiresAt` bounds *our* retention, not the upstream age. Prices must
+continue to be labelled `cached`, never `live`.
+
+### Remaining caveat — confirm through the written support channel
+
+The clarification came from an **AI support agent**. For engineering purposes it
+is sufficient and is treated as authoritative here. For **contractual and legal**
+purposes it is not:
+
+- it is not written terms, and no clause of the affiliate agreement was amended;
+- the affiliate agreement (Travelspark Ltd, HK) remains **silent** on commercial
+  use, caching and redistribution — the agent's answer does not change that text;
+- cl. 4.5 still permits termination *"at their own discretion at any time without
+  prior notice"*.
+
+**Before public launch**, obtain written confirmation from Travelpayouts' human
+support channel covering the same four questions (commercial use, redistribution
+and display, attribution wording and placement, Data-API scope). The draft ticket
+exists and is ready to send. Until that reply arrives, these fields stay
+**PROVISIONALLY VERIFIED**, not VERIFIED.
+
+### Still UNVERIFIED
+
+- **Exact attribution wording and placement.** "Less restrictive" is a direction,
+  not a specification. Whether every displayed price needs a marker-bearing link,
+  or a single general provider attribution suffices, is not established.
+- **Whether provider offer identifiers may be exposed** in our output.
+- **Written/contractual confirmation** of everything in the agent response.
+
+### Superseded
+
+The 2026-09-18 attempt recorded below is retained for history. The support centre
+(`support.travelpayouts.com`) returns **HTTP 403 to automated requests** and
+still does; `api.travelpayouts.com/aviasales/v3/prices_for_dates` returns **401
+without a token**. Those access findings stand. The *conclusions* drawn from them
+— that commercial use, caching, redistribution and attribution were all
+unverifiable — are superseded by the 2026-09-21 agent response above, except
+where listed under *Still UNVERIFIED*.
 
 ### Questions to answer from the partner dashboard
 
-1. Does the account's program membership permit commercial use of Data API
-   prices in a metasearch-style product?
-2. May normalized prices be stored, and for how long? Is there a required
-   maximum cache age or a mandatory refresh?
-3. May prices be shown to end users without an affiliate link, and must every
-   displayed price carry a marker-bearing link?
-4. What attribution or branding must accompany displayed prices?
-5. What are the Data API rate limits and the consequences of exceeding them?
-6. May the published reference datasets (`/data/airports.json` and similar) be
-   stored in a source repository, or only fetched at deploy/run time?
-7. Does the real-time Flight Search API (the only one offering open-jaw) require
-   separate approval, and do its conversion obligations apply to us?
+Status as of 2026-09-21. "Agent" means answered by the AI support agent and
+therefore **provisionally** answered — see *Remaining caveat*.
 
-### Restrictions applied until those answers exist
+1. ~~Does the account's program membership permit commercial use of Data API
+   prices in a metasearch-style product?~~ — **Agent: yes**, subject to
+   registration, Aviasales connection and a token.
+2. ~~May normalized prices be stored, and for how long? Is there a required
+   maximum cache age or a mandatory refresh?~~ — **Agent: cache for 24 hours.**
+3. May prices be shown to end users without an affiliate link, and must every
+   displayed price carry a marker-bearing link? — **Partially.** Display is
+   permitted and requirements are "less restrictive" for the Data API, but the
+   marker-per-price question is **still open**.
+4. What attribution or branding must accompany displayed prices? — **Still open.**
+   Direction known, exact wording and placement unknown.
+5. ~~What are the Data API rate limits and the consequences of exceeding them?~~
+   — **Documented: 600 rpm**, `X-Rate-Limit*` headers, HTTP 429 on breach.
+6. May the published reference datasets (`/data/airports.json` and similar) be
+   stored in a source repository, or only fetched at deploy/run time? — **Still
+   open.** The conservative restriction below stays in force.
+7. ~~Does the real-time Flight Search API (the only one offering open-jaw) require
+   separate approval, and do its conversion obligations apply to us?~~ — **Agent:
+   Search API rules do not apply to Data API output.** Whether the Search API
+   itself needs separate approval remains open, and is moot while unused.
+
+### Restrictions applied
 
 These are deliberately conservative; they are engineering constraints, not
-claims about what the terms say.
+claims about what the terms say. All remain in force.
 
 - Raw API responses are **never committed**; captures stay in a gitignored
   directory and test fixtures are synthetic.
 - Reference datasets are fetched locally and **not committed**; only a
   provenance record (source, timestamp, checksum, record count) is committed.
+  *(Question 6 is still open, so this stays.)*
 - Every price is labelled `cached` with its `fetchedAt`, and is never presented
-  as live or bookable.
+  as live or bookable. *(Reinforced: a displayed fare may be up to 72h old.)*
 - Booking links are emitted only when an affiliate marker is configured;
-  otherwise no link is produced rather than an unattributed one.
-- No public deployment of this data until questions 1–4 are answered.
+  otherwise no link is produced rather than an unattributed one. *(Stays until
+  questions 3–4 are answered precisely.)*
+- **Cache age for Data API results must never exceed 24 hours.**
+- **No public deployment** until attribution (questions 3–4) is specified and the
+  agent clarification is confirmed in writing by human support.
 
 ---
 
@@ -405,7 +538,21 @@ No provider should be treated as production-ready until:
 
 Record significant provider-policy changes here.
 
-Example:
+```text
+2026-09-21
+Provider: Aviasales / Travelpayouts
+Change:   Commercial use, caching, redistribution and booking-independence moved
+          from UNVERIFIED to PROVISIONALLY VERIFIED. Data API confirmed as not
+          governed by Search API restrictions. A 24-hour maximum cache age is
+          recorded as a binding provider constraint.
+Source:   Aviasales AI agent response, 2026-09-21 (reproduced verbatim in the
+          Aviasales section). Provider evidence, not a contract.
+Impact:   Aviasales Data API becomes the current flight discovery provider for
+          development. Provenance mapping fetchedAt + 24h -> expiresAt is agreed
+          but NOT YET IMPLEMENTED. Attribution wording remains unspecified, so
+          the no-public-deployment restriction stands. Written human-support
+          confirmation required before public launch. No code changed.
+```
 
 ```text
 2026-09-17
