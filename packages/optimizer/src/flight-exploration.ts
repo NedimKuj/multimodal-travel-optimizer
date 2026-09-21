@@ -13,6 +13,7 @@ import {
   type DomainIssue,
   type FlightProvider,
   type FlightSearchQuery,
+  type LocalDate,
   type Location,
   type ProviderCallMetrics,
   type ProviderFailure,
@@ -281,8 +282,14 @@ export interface CandidateContext {
 export interface StayBoundary {
   /** The segment whose arrival puts the traveler where they stay. */
   readonly reached: TransportSegment;
-  /** The segment whose departure takes them away again. */
-  readonly left: TransportSegment;
+  /**
+   * The segment whose departure takes them away again. Absent for the final
+   * stay of a one-way trip, which nothing takes them away from: it ends at
+   * `endsAt` instead (ADR 0018).
+   */
+  readonly left?: TransportSegment;
+  /** When this stay ends, when no departure bounds it. */
+  readonly endsAt?: LocalDate;
   /** Where the traveler is while they stay: the city, or the airport itself. */
   readonly place: Location;
   /** Set when the traveler makes their own way between two places (ADR 0014). */
@@ -397,6 +404,8 @@ export function buildAccessTransfers(
   legs: readonly TransportSegment[],
   request: SearchRequest,
   context: CandidateContext,
+  /** The declared end of a trip that never departs again (ADR 0018). */
+  endsAt?: LocalDate,
 ): AccessTransfers {
   const segments: TransportSegment[] = [];
   const offers: TransportOffer[] = [];
@@ -428,6 +437,18 @@ export function buildAccessTransfers(
         ? {}
         : { gap: gapBetween(reached.destination, left.origin, context.geography) }),
     });
+  }
+
+  // A one-way ends where it landed. The traveler still has to get from the
+  // airport into the city, and then they simply stay until the date they gave.
+  const last = legs.at(-1);
+  if (endsAt !== undefined && last !== undefined) {
+    const inbound = transferIntoCity(last, request, context);
+    if (inbound.leg !== undefined) {
+      segments.push(inbound.leg.segment);
+      offers.push(inbound.leg.offer);
+    }
+    stays.push({ reached: inbound.leg?.segment ?? last, endsAt, place: inbound.place });
   }
 
   return { segments, offers, stays };
@@ -514,6 +535,47 @@ export function buildOriginTransfers(
   return { segments: [out.segment, back.segment], offers: [out.offer, back.offer] };
 }
 
+/**
+ * The ride out to an alternative origin, with no ride back.
+ *
+ * A one-way trip never returns, so only half of `buildOriginTransfers` applies:
+ * pairing it with a journey home from an arrival that never happens would
+ * invent a leg (ADR 0018).
+ */
+export function buildOutboundOriginTransfer(
+  outbound: TransportSegment,
+  request: SearchRequest,
+  context: CandidateContext,
+): { segments: TransportSegment[]; offers: TransportOffer[] } {
+  const requested = context.requestedOrigin;
+  if (outbound.origin.id === requested.id) return { segments: [], offers: [] };
+
+  const distanceKm = context.geography.distanceBetween(requested, outbound.origin);
+  if (!Number.isFinite(distanceKm)) return { segments: [], offers: [] };
+
+  const toAirport = requiredConnectionMinutes(
+    outbound.origin,
+    outbound.origin,
+    context.connectionRules,
+    { arrivingBy: "ground_transfer", departingBy: outbound.mode },
+  );
+  if (!toAirport.ok) return { segments: [], offers: [] };
+
+  const out = buildGroundTransferLeg({
+    id: `${outbound.id}:origin-in`,
+    from: requested,
+    to: outbound.origin,
+    distanceKm,
+    travelers: request.travelers,
+    anchor: outbound.departureAt,
+    anchorRole: "arrive_before",
+    bufferMinutes: toAirport.minutes,
+    fetchedAt: context.fetchedAt,
+    config: context.groundTransfer,
+  });
+  return { segments: [out.segment], offers: [out.offer] };
+}
+
 /** Turns one offer into a validated, feasible, in-window, in-budget candidate. */
 function buildCandidate(
   offer: TransportOffer,
@@ -557,6 +619,11 @@ export interface AssembleCandidateInput {
   readonly maxUnpricedGapKm?: number;
   /** Nights required in each place a multi-stop trip stops at (ADR 0015 §4). */
   readonly stayRules?: StayRules;
+  /**
+   * When a one-way trip ends. Present only for an itinerary with no closing
+   * departure, and then it is the checkout boundary for its final stay.
+   */
+  readonly endsAt?: LocalDate;
 }
 
 /**
@@ -565,8 +632,27 @@ export interface AssembleCandidateInput {
  * One entry per junction for a trip that leaves from where it landed, two where
  * it does not — an open jaw's arrival and departure airports are both visited.
  */
-function visitedAirports(legs: readonly TransportSegment[]): Location[] {
+function visitedAirports(
+  legs: readonly TransportSegment[],
+  endsAt?: LocalDate,
+): Location[] {
   const visited: Location[] = [];
+  // A one-way ends where it landed, so its final arrival is a destination
+  // rather than a place it passes through.
+  if (endsAt !== undefined) {
+    const last = legs.at(-1);
+    if (last !== undefined) {
+      for (let index = 0; index + 1 < legs.length; index += 1) {
+        const arriving = legs[index];
+        const leaving = legs[index + 1];
+        if (arriving === undefined || leaving === undefined) continue;
+        visited.push(arriving.destination);
+        if (arriving.destination.id !== leaving.origin.id) visited.push(leaving.origin);
+      }
+      visited.push(last.destination);
+    }
+    return visited;
+  }
   for (let index = 0; index + 1 < legs.length; index += 1) {
     const arriving = legs[index];
     const leaving = legs[index + 1];
@@ -587,7 +673,9 @@ export function assembleCandidate(input: AssembleCandidateInput): AttemptOutcome
   const { legs, request, window, context } = input;
   const outbound = legs[0];
   const inbound = legs.at(-1);
-  if (outbound === undefined || inbound === undefined || legs.length < 2) {
+  // A one-way needs only an outbound; everything else needs a way back too.
+  const minimumLegs = input.endsAt === undefined ? 2 : 1;
+  if (outbound === undefined || inbound === undefined || legs.length < minimumLegs) {
     return { ok: false, counter: "rejectedInvalid" };
   }
 
@@ -603,7 +691,7 @@ export function assembleCandidate(input: AssembleCandidateInput): AttemptOutcome
     }
   }
 
-  const access = buildAccessTransfers(legs, request, context);
+  const access = buildAccessTransfers(legs, request, context, input.endsAt);
 
   // The gap's endpoints depend on which transfers exist, so its distance can
   // only be judged here — and the distance judged is the one reported.
@@ -615,7 +703,12 @@ export function assembleCandidate(input: AssembleCandidateInput): AttemptOutcome
     }
   }
 
-  const originAccess = buildOriginTransfers(outbound, inbound, request, context);
+  // A one-way never comes home, so only the ride out to an alternative origin
+  // applies; there is no journey back from an arrival that never happens.
+  const originAccess =
+    input.endsAt === undefined
+      ? buildOriginTransfers(outbound, inbound, request, context)
+      : buildOutboundOriginTransfer(outbound, request, context);
   const allSegments = [...legs, ...access.segments, ...originAccess.segments].sort((a, b) =>
     a.departureAt.instant < b.departureAt.instant
       ? -1
@@ -643,6 +736,7 @@ export function assembleCandidate(input: AssembleCandidateInput): AttemptOutcome
   // the search stage refines it; an unresolved one is already final (ADR 0016).
   const stayIntervals = deriveStayIntervals(access.stays, context.cities);
 
+
   const candidate: TripCandidate = {
     id: input.id,
     origin: first.origin,
@@ -652,6 +746,7 @@ export function assembleCandidate(input: AssembleCandidateInput): AttemptOutcome
     stays: [],
     gaps,
     accommodation: initialAccommodation(stayIntervals, "outside_shortlist"),
+    ...(input.endsAt !== undefined && { endsAt: input.endsAt }),
   };
 
   const summarized = summarizeTrip(candidate);
@@ -671,11 +766,14 @@ export function assembleCandidate(input: AssembleCandidateInput): AttemptOutcome
   // moment they reach the place to the moment they leave it.
   const evaluation = evaluateTrip(window, {
     tripStart: localDate(outbound.departureAt),
-    tripEnd: localDate(inbound.departureAt),
-    stays: access.stays.map((stay) => ({
-      groundStart: localDate(stay.reached.arrivalAt),
-      groundEnd: localDate(stay.left.departureAt),
-    })),
+    // A one-way ends on the date it declared, not on a departure it never makes.
+    tripEnd: input.endsAt ?? localDate(inbound.departureAt),
+    stays: access.stays.flatMap((stay) => {
+      const groundEnd = stay.left === undefined ? stay.endsAt : localDate(stay.left.departureAt);
+      return groundEnd === undefined
+        ? []
+        : [{ groundStart: localDate(stay.reached.arrivalAt), groundEnd }];
+    }),
   }, input.stayRules);
   if (!evaluation.ok) {
     return {
@@ -716,7 +814,7 @@ export function assembleCandidate(input: AssembleCandidateInput): AttemptOutcome
       nights: evaluation.nights,
       nightsByStay: evaluation.nightsByStay,
       stayIntervals,
-      destinationAirports: visitedAirports(legs),
+      destinationAirports: visitedAirports(legs, input.endsAt),
     },
   };
 }

@@ -70,7 +70,11 @@ export function deriveStayIntervals(
 
   for (const boundary of boundaries) {
     const checkIn = localDate(boundary.reached.arrivalAt);
-    const checkOut = localDate(boundary.left.departureAt);
+    // Either the next departure takes them away, or the trip simply ends.
+    const checkOut = boundary.left === undefined
+      ? boundary.endsAt
+      : localDate(boundary.left.departureAt);
+    if (checkOut === undefined) continue;
     // The same count `evaluateTrip` reaches for the same junction, so the two
     // can never disagree about how long the traveler is somewhere.
     const nights = daysBetween(checkIn, checkOut);
@@ -80,7 +84,7 @@ export function deriveStayIntervals(
     // stop these are the same place; across an unpriced sector they are not.
     const spanned = distinct(
       placeOf(boundary.reached.destination, cities),
-      placeOf(boundary.left.origin, cities),
+      placeOf(boundary.left?.origin ?? boundary.reached.destination, cities),
     );
 
     intervals.push({

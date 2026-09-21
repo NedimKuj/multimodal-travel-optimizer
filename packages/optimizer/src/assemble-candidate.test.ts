@@ -1,4 +1,8 @@
-import { parseUtcInstant, type TransportSegment } from "@travel-optimizer/domain";
+import {
+  parseLocalDate,
+  parseUtcInstant,
+  type TransportSegment,
+} from "@travel-optimizer/domain";
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_CONNECTION_RULES } from "./connection-rules.js";
@@ -256,5 +260,105 @@ describe("assembleCandidate — temporal chaining", () => {
       ok: false,
       counter: "rejectedReturnBeforeArrival",
     });
+  });
+});
+
+describe("assembleCandidate — a trip that does not return", () => {
+  const oneWayRequest = {
+    returnDate: undefined,
+    endDate: "2027-01-02",
+    minNights: undefined,
+    maxNights: undefined,
+    flexibilityDays: 0,
+    departureDate: "2026-12-27",
+  };
+
+  function assembleOneWay(legs: readonly TransportSegment[], endsAt = "2027-01-02") {
+    return assembleCandidate({
+      id: `one-way:${legs.map((leg) => leg.id).join("+")}`,
+      legs,
+      offers: legs.map((leg, index) => offer(`fare-${leg.id}`, [leg.id], 3000 + index * 100)),
+      request: request(oneWayRequest),
+      window: windowFor(oneWayRequest),
+      context,
+      endsAt: parseLocalDate(endsAt),
+    });
+  }
+
+  it("accepts a single leg", () => {
+    const outcome = assembleOneWay([outbound]);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.attempt.candidate.segments).toHaveLength(1);
+  });
+
+  it("invents no closing segment", () => {
+    const outcome = assembleOneWay([outbound]);
+    if (!outcome.ok) throw new Error("expected a candidate");
+    const flights = outcome.attempt.candidate.segments.filter((leg) => leg.mode === "flight");
+    expect(flights).toHaveLength(1);
+    expect(flights[0]?.origin.iata).toBe("SJJ");
+    // Nothing brings the traveler home.
+    expect(
+      outcome.attempt.candidate.segments.some((leg) => leg.destination.iata === "SJJ"),
+    ).toBe(false);
+  });
+
+  it("stays from the final arrival to the declared end", () => {
+    const outcome = assembleOneWay([outbound]);
+    if (!outcome.ok) throw new Error("expected a candidate");
+    expect(outcome.attempt.stayIntervals).toHaveLength(1);
+    expect(outcome.attempt.stayIntervals[0]).toMatchObject({
+      checkIn: "2026-12-27",
+      checkOut: "2027-01-02",
+      nights: 6,
+    });
+  });
+
+  it("checks out exactly on the requested boundary", () => {
+    for (const end of ["2026-12-28", "2027-01-02", "2027-01-10"]) {
+      const outcome = assembleOneWay([outbound], end);
+      if (!outcome.ok) continue;
+      expect(outcome.attempt.stayIntervals[0]?.checkOut).toBe(end);
+    }
+  });
+
+  it("reports an end without reporting a return", () => {
+    const outcome = assembleOneWay([outbound]);
+    if (!outcome.ok) throw new Error("expected a candidate");
+    expect(outcome.attempt.summary.returnDate).toBeUndefined();
+    expect(outcome.attempt.summary.tripEndDate).toBe("2027-01-02");
+    expect(outcome.attempt.summary.departureDate).toBe("2026-12-27");
+  });
+
+  it("names its destination", () => {
+    const outcome = assembleOneWay([outbound]);
+    if (!outcome.ok) throw new Error("expected a candidate");
+    expect(outcome.attempt.destinationAirports.map((airport) => airport.iata)).toEqual(["CIA"]);
+  });
+
+  it("carries the traveler in from a distant airport before the stay begins", () => {
+    const intoMilan = segment({
+      id: "out-mxp-oneway",
+      origin: SJJ,
+      destination: MXP,
+      departure: "2026-12-27T10:00+01:00",
+      arrival: "2026-12-27T11:30+01:00",
+    });
+    const outcome = assembleOneWay([intoMilan]);
+    if (!outcome.ok) throw new Error("expected a candidate");
+    const transfers = outcome.attempt.candidate.segments.filter(
+      (leg) => leg.mode === "ground_transfer",
+    );
+    // In from Malpensa, and nothing back out: the trip ends in Milan.
+    expect(transfers.map((leg) => [leg.origin.iata, leg.destination.iata])).toEqual([
+      ["MXP", "MIL"],
+    ]);
+    expect(outcome.attempt.stayIntervals[0]?.cities[0].name).toBe("Milan");
+    expect(outcome.attempt.stayIntervals[0]?.checkOut).toBe("2027-01-02");
+  });
+
+  it("refuses a trip with no legs at all", () => {
+    expect(assembleOneWay([])).toEqual({ ok: false, counter: "rejectedInvalid" });
   });
 });
