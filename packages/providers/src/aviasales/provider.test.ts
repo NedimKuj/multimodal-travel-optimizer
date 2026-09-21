@@ -281,6 +281,33 @@ describe("AviasalesFlightProvider", () => {
     expect(second.data.offers).toHaveLength(1);
   });
 
+  it("dates a replayed response from when it was stored, not when it was replayed", async () => {
+    // A cache hit must not report data as newer than it is. If it did, the
+    // derived expiry would run 24h from the replay and the effective retention
+    // would exceed the provider's limit by the cache TTL.
+    let clock = Date.parse("2026-09-18T09:00:00Z");
+    const now = (): number => clock;
+    const cache = createInMemoryResponseCache(60 * 60 * 1000, now);
+    const provider = createAviasalesFlightProvider({
+      config: config(),
+      airports,
+      cache,
+      fetchImpl: stubFetch(pricesForDatesBody([ONE_WAY_RECORD])),
+      now: () => new Date(clock),
+    });
+
+    const first = await provider.search(december);
+    clock += 59 * 60 * 1000; // still inside the 1-hour cache window
+    const second = await provider.search(december);
+
+    if (first.status === "failed" || second.status === "failed") throw new Error("expected data");
+    expect(second.metrics.cache).toBe("hit");
+
+    const replayed = second.data.offers[0]?.provenance;
+    expect(replayed?.fetchedAt).toBe("2026-09-18T09:00:00.000Z");
+    expect(replayed?.fetchedAt).toBe(first.data.offers[0]?.provenance.fetchedAt);
+  });
+
   it("refuses a query that would exceed the call budget rather than truncating it", async () => {
     const urls: string[] = [];
     const provider = createAviasalesFlightProvider({

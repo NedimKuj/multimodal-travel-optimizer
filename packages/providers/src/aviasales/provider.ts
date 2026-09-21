@@ -1,5 +1,6 @@
 import {
   failedResult,
+  instantFromEpochMilliseconds,
   isCurrencyCode,
   localDate,
   okResult,
@@ -244,9 +245,17 @@ export function createAviasalesFlightProvider(
 
       for (const call of planned) {
         const key = redactSecrets(call.url, secrets);
-        let body = cache?.get(key)?.body;
-        if (body !== undefined) {
+        const cached = cache?.get(key);
+        let body: string;
+        // When we obtained the provider response. A replayed cache entry was
+        // obtained when it was stored, not now: stamping replay time onto it
+        // would report data as newer than it is, and would push the derived
+        // retention boundary past 24h from the actual fetch.
+        let obtainedAt: number;
+        if (cached !== undefined) {
           cacheHits += 1;
+          body = cached.body;
+          obtainedAt = cached.storedAt;
         } else {
           const outcome = await httpGetText(
             {
@@ -266,6 +275,7 @@ export function createAviasalesFlightProvider(
             continue;
           }
           body = outcome.body;
+          obtainedAt = now().getTime();
           cache?.set(key, body);
         }
 
@@ -288,7 +298,7 @@ export function createAviasalesFlightProvider(
         const mapped = mapPriceRecords(parsed.response.data, {
           airports,
           currency,
-          fetchedAt: parseUtcInstant(now().toISOString()),
+          fetchedAt: instantFromEpochMilliseconds(obtainedAt),
           ...(config.marker !== undefined && { marker: config.marker }),
           bookingBaseUrl: config.bookingBaseUrl,
         });
