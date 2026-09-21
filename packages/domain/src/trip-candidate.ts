@@ -11,7 +11,12 @@ import { locationSchema, type Location } from "./location.js";
 import type { CurrencyCode } from "./money/currency.js";
 import { addMoney, allocateEvenly, sumMoney, type Money } from "./money/money.js";
 import { weakestSourceType, type SourceType } from "./provenance.js";
-import { addDays, compareLocalDates, type LocalDate } from "./time/local-date.js";
+import {
+  addDays,
+  compareLocalDates,
+  localDateSchema,
+  type LocalDate,
+} from "./time/local-date.js";
 import { compareZonedTimestamps, localDate, minutesBetween } from "./time/zoned-timestamp.js";
 import {
   offerPriceForTravelers,
@@ -63,6 +68,18 @@ export const tripCandidateSchema = z.object({
   /** Sectors the traveler arranges themselves; excluded from every amount. */
   gaps: z.array(itineraryGapSchema).default([]),
   /**
+   * When the trip ends, for an itinerary with no closing departure.
+   *
+   * A round trip's final segment bounds its time on the ground. A one-way has
+   * no such segment, so the traveler states where it ends and the itinerary
+   * carries that — otherwise nights after the final arrival fall outside the
+   * model entirely (ADR 0005, resolved by ADR 0018).
+   *
+   * Absent on every round trip, open jaw and multi-city trip, which are bounded
+   * by their own last departure.
+   */
+  endsAt: localDateSchema.optional(),
+  /**
    * What is known about a bed for each period on the ground (ADR 0016).
    *
    * `stays` remains the priced source of truth for the amount; this says what
@@ -109,9 +126,9 @@ function findDuplicates(ids: readonly string[]): string[] {
  * `summarizeTrip` as `uncoveredNights`, and the cost scope says so
  * (docs/decisions/0005-trip-metrics-and-accommodation-coverage.md).
  *
- * Known limitation: time on the ground is bounded by the next departure, so a
- * trip whose last segment does not return to the origin cannot yet carry a
- * stay after its final arrival.
+ * A trip with no closing departure bounds its final ground time with `endsAt`
+ * instead, so a one-way itinerary can carry a stay after its final arrival
+ * (ADR 0018). Without it, that time is outside the model.
  */
 export function validateTripCandidate(trip: TripCandidate): DomainIssue[] {
   const issues: DomainIssue[] = [];
@@ -239,8 +256,18 @@ interface GroundGap {
   readonly departureDate: LocalDate;
 }
 
-/** Periods on the ground between consecutive segments, in local dates. */
-function groundGaps(segments: readonly TransportSegment[]): GroundGap[] {
+/**
+ * Periods on the ground, in local dates.
+ *
+ * Between consecutive segments, and — for a trip that declares one — from the
+ * final arrival to its stated end. That last period is what lets a one-way
+ * itinerary carry a stay at all: without a closing departure there is nothing
+ * else to bound it (ADR 0018).
+ */
+function groundGaps(
+  segments: readonly TransportSegment[],
+  endsAt?: LocalDate,
+): GroundGap[] {
   const gaps: GroundGap[] = [];
   for (let index = 1; index < segments.length; index += 1) {
     const previous = segments[index - 1];
@@ -250,6 +277,11 @@ function groundGaps(segments: readonly TransportSegment[]): GroundGap[] {
       arrivalDate: localDate(previous.arrivalAt),
       departureDate: localDate(next.departureAt),
     });
+  }
+
+  const last = segments.at(-1);
+  if (endsAt !== undefined && last !== undefined) {
+    gaps.push({ arrivalDate: localDate(last.arrivalAt), departureDate: endsAt });
   }
   return gaps;
 }
@@ -304,7 +336,7 @@ function stayFitsGap(stay: Stay, gap: GroundGap): boolean {
 
 function validateStays(trip: TripCandidate): DomainIssue[] {
   const issues: DomainIssue[] = [];
-  const gaps = groundGaps(trip.segments);
+  const gaps = groundGaps(trip.segments, trip.endsAt);
 
   for (const stay of trip.stays) {
     if (stay.guests !== trip.travelers) {
@@ -480,8 +512,19 @@ export interface TripSummary {
    * the journey they booked (docs/optimizer-spec.md §8).
    */
   readonly departureDate: LocalDate;
-  /** Local date the final return **fare segment** departs. */
-  readonly returnDate: LocalDate;
+  /**
+   * Local date the final return **fare segment** departs.
+   *
+   * Absent on a one-way trip, which has no return to date. It is never filled
+   * with the outbound departure: that would report a trip as returning on the
+   * day it left (ADR 0018).
+   */
+  readonly returnDate?: LocalDate;
+  /**
+   * Local date the trip ends: the final departure for a round trip, the
+   * declared end for a one-way. Always present, whatever the shape.
+   */
+  readonly tripEndDate: LocalDate;
   /** Stay cities in visiting order (consecutive repeats collapsed). */
   readonly destinations: readonly Location[];
   /**
@@ -597,7 +640,7 @@ export function summarizeTrip(trip: TripCandidate): SummarizeTripResult {
     if (destinations.at(-1)?.id !== stay.city.id) destinations.push(stay.city);
   }
 
-  const gaps = groundGaps(trip.segments);
+  const gaps = groundGaps(trip.segments, trip.endsAt);
   const connections = gaps.filter(
     (gap) => !trip.stays.some((stay) => stayFitsGap(stay, gap)),
   ).length;
@@ -662,7 +705,12 @@ export function summarizeTrip(trip: TripCandidate): SummarizeTripResult {
       // The window the traveler gave is about the journey they booked, so
       // transfers we added do not move these dates (spec §8).
       departureDate: localDate((fareLegs[0] ?? first).departureAt),
-      returnDate: localDate((fareLegs.at(-1) ?? last).departureAt),
+      // A trip returns only if something brings it back. One leg and a
+      // declared end is a one-way: it ends, but it does not return.
+      ...(trip.endsAt === undefined && {
+        returnDate: localDate((fareLegs.at(-1) ?? last).departureAt),
+      }),
+      tripEndDate: trip.endsAt ?? localDate((fareLegs.at(-1) ?? last).departureAt),
       destinations,
       nights: trip.stays.reduce((nights, stay) => nights + stay.nights, 0),
       uncoveredNights,

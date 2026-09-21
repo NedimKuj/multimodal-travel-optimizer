@@ -857,3 +857,71 @@ describe("accommodation coverage", () => {
     expect(result.uncoveredNights).toEqual([]);
   });
 });
+
+describe("a trip that ends without returning", () => {
+  const oneWay = (endsAt: string) =>
+    trip({
+      id: "one-way",
+      segments: [sjjToVie],
+      offers: [offer({ id: "offer-out", segmentIds: [sjjToVie.id], amountMinor: 7500 })],
+      stays: [],
+      endsAt,
+    });
+
+  it("bounds its final ground time with the declared end", () => {
+    // Lands 26 Dec, ends 2 Jan: seven nights on the ground, none of them
+    // reachable before this trip could declare where it stopped.
+    const result = summary(oneWay("2027-01-02"));
+    expect(result.uncoveredNights).toHaveLength(7);
+    expect(result.uncoveredNights[0]).toBe("2026-12-26");
+    expect(result.uncoveredNights.at(-1)).toBe("2027-01-01");
+  });
+
+  it("reports an end without reporting a return", () => {
+    const result = summary(oneWay("2027-01-02"));
+    expect(result.returnDate).toBeUndefined();
+    expect(result.tripEndDate).toBe("2027-01-02");
+    // Never the outbound departure masquerading as a return.
+    expect(result.departureDate).toBe("2026-12-26");
+  });
+
+  it("invents no closing segment", () => {
+    const candidate = oneWay("2027-01-02");
+    expect(candidate.segments).toHaveLength(1);
+    expect(summary(candidate).legs).toBe(1);
+  });
+
+  it("carries a stay after its final arrival", () => {
+    const withStay = trip({
+      id: "one-way-stay",
+      segments: [sjjToVie],
+      offers: [offer({ id: "offer-out", segmentIds: [sjjToVie.id], amountMinor: 7500 })],
+      stays: [viennaWeek],
+      endsAt: "2027-01-02",
+    });
+    const result = summarizeTrip(withStay);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.summary.cost.accommodation).toEqual(viennaWeek.price);
+  });
+
+  it("refuses a stay running past the declared end", () => {
+    const tooLong = trip({
+      id: "one-way-overrun",
+      segments: [sjjToVie],
+      offers: [offer({ id: "offer-out", segmentIds: [sjjToVie.id], amountMinor: 7500 })],
+      stays: [viennaWeek],
+      endsAt: "2026-12-28",
+    });
+    expect(validateTripCandidate(tooLong).map((entry) => entry.code)).toContain(
+      "STAY_OUTSIDE_GROUND_TIME",
+    );
+  });
+
+  it("leaves a round trip's dates and ground time exactly as they were", () => {
+    const result = summary(roundTrip);
+    expect(result.returnDate).toBe("2027-01-02");
+    expect(result.tripEndDate).toBe(result.returnDate);
+    expect(roundTrip.endsAt).toBeUndefined();
+  });
+});
