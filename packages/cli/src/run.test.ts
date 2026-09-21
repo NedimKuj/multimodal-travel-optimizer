@@ -1,3 +1,7 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { failedResult, type AirportRepository } from "@travel-optimizer/domain";
 import {
   cityRepository,
@@ -10,9 +14,29 @@ import {
   stubFlightProvider,
 } from "@travel-optimizer/optimizer/test-fixtures";
 import { AVIASALES_MAX_RETENTION_MS, aviasalesRetentionTtl } from "@travel-optimizer/providers";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { CACHE_TTL_MS, run, type CliIo, type RunOverrides } from "./run.js";
+
+/**
+ * Every TTL run.ts hands to the retention guard, in order.
+ *
+ * The wrapper delegates to the real guard, so behaviour is unchanged; it only
+ * records that the call happened. Without this, removing the guard from the
+ * cache construction in run.ts would leave the suite green.
+ */
+const retentionCalls = vi.hoisted((): number[] => []);
+
+vi.mock("@travel-optimizer/providers", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@travel-optimizer/providers")>();
+  return {
+    ...actual,
+    aviasalesRetentionTtl: (ttlMs: number): number => {
+      retentionCalls.push(ttlMs);
+      return actual.aviasalesRetentionTtl(ttlMs);
+    },
+  };
+});
 
 const TOKEN = "secret-token-value";
 
@@ -171,5 +195,32 @@ describe("response cache retention", () => {
     // Sitting exactly on the ceiling would leave no room for the clock skew
     // between storing a response and deriving an expiry from it.
     expect(CACHE_TTL_MS).toBeLessThan(AVIASALES_MAX_RETENTION_MS);
+  });
+
+  it("builds its response cache through the retention guard", async () => {
+    // The assertions above would still pass if run.ts stopped calling the
+    // guard, so this exercises the real construction path: no flightProvider
+    // override, which is the only way the cache is actually built.
+    retentionCalls.length = 0;
+    const cacheRoot = mkdtempSync(join(tmpdir(), "trip-search-cache-"));
+    // The adapter would otherwise reach the network once it is constructed.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(new Response(JSON.stringify({ success: true, currency: "eur", data: [] }))),
+      ),
+    );
+    try {
+      const cli = { ...io(), cwd: cacheRoot };
+      const code = await run(args, cli, {
+        referenceData: { airports, cities: cityRepository, geography: fixtureGeography },
+      });
+
+      expect(code).toBe(0);
+      expect(retentionCalls).toEqual([CACHE_TTL_MS]);
+    } finally {
+      vi.unstubAllGlobals();
+      rmSync(cacheRoot, { recursive: true, force: true });
+    }
   });
 });
