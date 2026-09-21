@@ -2,7 +2,13 @@ import { parseUtcInstant, type TransportSegment } from "@travel-optimizer/domain
 import { describe, expect, it } from "vitest";
 
 import { applyAccommodation } from "./accommodation-search.js";
-import { changesOf, comparabilityKey, coverageProfile, dominates } from "./dominance.js";
+import {
+  changesOf,
+  comparabilityKey,
+  coverageProfile,
+  dominates,
+  pruneDominated,
+} from "./dominance.js";
 import { DEFAULT_CONNECTION_RULES } from "./connection-rules.js";
 import {
   assembleCandidate,
@@ -326,5 +332,137 @@ describe("the relation is a strict partial order", () => {
   it("is transitive", () => {
     expect(dominates(a, b) && dominates(b, c)).toBe(true);
     expect(dominates(a, c)).toBe(true);
+  });
+});
+
+describe("pruneDominated", () => {
+  /** One destination holding the given candidates. */
+  const into = (candidates: readonly RankedCandidate[]) => [
+    { city: undefined, cities: [], airports: [], candidates },
+  ];
+
+  it("removes a candidate another makes redundant", () => {
+    const best = build("best", { amountMinor: 10000 });
+    const worst = build("worst", { amountMinor: 20000, extraMinutes: 60, stops: 2 });
+    const result = pruneDominated(into([best, worst]));
+    expect(result.destinations[0]?.candidates.map((c) => c.candidate.id)).toEqual(["best"]);
+  });
+
+  it("leaves a set of mutually incomparable candidates untouched", () => {
+    const cheapSlow = build("cheap-slow", { amountMinor: 10000, extraMinutes: 120 });
+    const dearFast = build("dear-fast", { amountMinor: 20000 });
+    const middling = build("middling", { amountMinor: 15000, extraMinutes: 60 });
+    const input = into([cheapSlow, dearFast, middling]);
+    const result = pruneDominated(input);
+    expect(result.destinations[0]?.candidates.map((c) => c.candidate.id)).toEqual([
+      "cheap-slow",
+      "dear-fast",
+      "middling",
+    ]);
+    expect(result.counts.pruned).toBe(0);
+    // Untouched, not merely equal: the destination object itself is reused.
+    expect(result.destinations[0]).toBe(input[0]);
+  });
+
+  it("never lets one destination prune another", () => {
+    // Identical shapes, one far worse — but in a different destination, so
+    // pruning cannot reach it. A cheaper Rome must not eliminate Milan.
+    const rome = build("rome", { amountMinor: 10000 });
+    const milan = build("milan", { amountMinor: 90000, extraMinutes: 180, stops: 3 });
+    const result = pruneDominated([
+      { city: undefined, cities: [], airports: [], candidates: [rome] },
+      { city: undefined, cities: [], airports: [], candidates: [milan] },
+    ]);
+    expect(result.counts.pruned).toBe(0);
+    expect(result.destinations).toHaveLength(2);
+  });
+
+  it("keeps both when nothing is strictly better", () => {
+    const result = pruneDominated(
+      into([build("a", { amountMinor: 10000 }), build("b", { amountMinor: 10000 })]),
+    );
+    expect(result.destinations[0]?.candidates).toHaveLength(2);
+    expect(result.counts.pruned).toBe(0);
+  });
+
+  it("gives the same answer whatever order candidates arrive in", () => {
+    const pool = [
+      build("a", { amountMinor: 10000 }),
+      build("b", { amountMinor: 20000, extraMinutes: 60, stops: 2 }),
+      build("c", { amountMinor: 15000, extraMinutes: 30 }),
+      build("d", { amountMinor: 12000 }),
+    ];
+    const survivors = (order: readonly RankedCandidate[]) =>
+      pruneDominated(into(order))
+        .destinations[0]?.candidates.map((c) => c.candidate.id)
+        .sort();
+    const forwards = survivors(pool);
+    expect(survivors([...pool].reverse())).toEqual(forwards);
+    expect(survivors([pool[2], pool[0], pool[3], pool[1]].filter((x) => x !== undefined))).toEqual(
+      forwards,
+    );
+  });
+
+  it("removes a candidate dominated transitively", () => {
+    const a = build("a", { amountMinor: 9000 });
+    const b = build("b", { amountMinor: 12000 });
+    const c = build("c", { amountMinor: 15000 });
+    const result = pruneDominated(into([c, b, a]));
+    expect(result.destinations[0]?.candidates.map((entry) => entry.candidate.id)).toEqual(["a"]);
+  });
+
+  it("does not prune across trip shapes within one destination", () => {
+    const roundTrip = build("rt", { amountMinor: 5000 });
+    const multiCity = build("mc", {
+      amountMinor: 30000,
+      extraMinutes: 90,
+      stops: 2,
+      multiCity: true,
+    });
+    const result = pruneDominated(into([roundTrip, multiCity]));
+    expect(result.counts.pruned).toBe(0);
+    expect(result.destinations[0]?.candidates).toHaveLength(2);
+  });
+});
+
+describe("funnel accounting", () => {
+  const into = (candidates: readonly RankedCandidate[]) => [
+    { city: undefined, cities: [], airports: [], candidates },
+  ];
+
+  it("reconciles exactly", () => {
+    const result = pruneDominated(
+      into([
+        build("best", { amountMinor: 10000 }),
+        build("worst", { amountMinor: 20000, extraMinutes: 60, stops: 2 }),
+        build("other", { amountMinor: 15000, extraMinutes: 30 }),
+      ]),
+    );
+    const { entered, pruned, remaining } = result.counts;
+    expect(entered).toBe(pruned + remaining);
+    expect(remaining).toBe(
+      result.destinations.flatMap((destination) => destination.candidates).length,
+    );
+  });
+
+  it("reconciles across several destinations", () => {
+    const result = pruneDominated([
+      {
+        city: undefined,
+        cities: [],
+        airports: [],
+        candidates: [
+          build("a1", { amountMinor: 10000 }),
+          build("a2", { amountMinor: 20000, extraMinutes: 60, stops: 2 }),
+        ],
+      },
+      { city: undefined, cities: [], airports: [], candidates: [build("b1", { amountMinor: 9000 })] },
+    ]);
+    expect(result.counts).toEqual({ entered: 3, pruned: 1, remaining: 2 });
+    expect(result.counts.entered).toBe(result.counts.pruned + result.counts.remaining);
+  });
+
+  it("counts nothing for an empty search", () => {
+    expect(pruneDominated([]).counts).toEqual({ entered: 0, pruned: 0, remaining: 0 });
   });
 });

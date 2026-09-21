@@ -203,34 +203,35 @@ describe("runFlightSearch", () => {
   });
 });
 
+/** What transport alone produced, before pruning or accommodation ran. */
+async function transportOnly(overrides: Record<string, unknown> = {}) {
+  return exploreFlights(
+    request(overrides),
+    {
+      flightProvider: stubFlightProvider(searchResult([romeTrip, istanbulTrip])),
+      cities: cityRepository,
+      geography: fixtureGeography,
+      airports: fixtureAirports,
+    },
+    { currency: "EUR", now: fixedClock() },
+  );
+}
+
+/** The same two fixture trips, run through the whole search. */
+async function traced(overrides: Record<string, unknown> = {}) {
+  return runFlightSearch(
+    request(overrides),
+    {
+      flightProvider: stubFlightProvider(searchResult([romeTrip, istanbulTrip])),
+      cities: cityRepository,
+      geography: fixtureGeography,
+      airports: fixtureAirports,
+    },
+    { currency: "EUR", now: fixedClock(), newSearchId: () => "search-r" },
+  );
+}
+
 describe("transport behaviour with no accommodation provider", () => {
-  /** What transport alone produced, before any accommodation stage ran. */
-  async function transportOnly(overrides: Record<string, unknown> = {}) {
-    return exploreFlights(
-      request(overrides),
-      {
-        flightProvider: stubFlightProvider(searchResult([romeTrip, istanbulTrip])),
-        cities: cityRepository,
-        geography: fixtureGeography,
-        airports: fixtureAirports,
-      },
-      { currency: "EUR", now: fixedClock() },
-    );
-  }
-
-  async function traced(overrides: Record<string, unknown> = {}) {
-    return runFlightSearch(
-      request(overrides),
-      {
-        flightProvider: stubFlightProvider(searchResult([romeTrip, istanbulTrip])),
-        cities: cityRepository,
-        geography: fixtureGeography,
-        airports: fixtureAirports,
-      },
-      { currency: "EUR", now: fixedClock(), newSearchId: () => "search-r" },
-    );
-  }
-
   const flat = (destinations: readonly { candidates: readonly RankedCandidate[] }[]) =>
     destinations.flatMap((destination) => destination.candidates);
 
@@ -283,5 +284,47 @@ describe("transport behaviour with no accommodation provider", () => {
   it("presents nothing as a complete trip cost", async () => {
     const after = flat((await traced()).destinations);
     expect(after.every((entry) => entry.summary.cost.scope !== "complete")).toBe(true);
+  });
+});
+
+describe("dominance pruning in a search", () => {
+  it("reports what pruning did, reconciling exactly", async () => {
+    const result = await trace();
+    expect(result.pruning).toBeDefined();
+    const { entered, pruned, remaining } = result.pruning ?? {
+      entered: -1,
+      pruned: 0,
+      remaining: 0,
+    };
+    expect(entered).toBe(pruned + remaining);
+    expect(remaining).toBe(
+      result.destinations.flatMap((destination) => destination.candidates).length,
+    );
+  });
+
+  it("keeps pruning counts apart from every other reduction", async () => {
+    const result = await trace();
+    // Nothing was redundant here, so pruning removed nothing — even though the
+    // search has its own filtered-out counts for quite different reasons.
+    expect(result.pruning?.pruned).toBe(0);
+    expect(result.counts.candidatesBuilt).toBe(result.pruning?.entered);
+    // Budget skips, invalid candidates and the accommodation shortlist are
+    // reported elsewhere and never folded into this number.
+    expect(result.accommodation?.shortlisted).not.toBe(result.pruning?.pruned);
+  });
+
+  it("leaves transport untouched when nothing is dominated", async () => {
+    const before = await transportOnly();
+    const after = await traced();
+    expect(
+      after.destinations.flatMap((destination) =>
+        destination.candidates.map((entry) => entry.candidate.id),
+      ),
+    ).toEqual(
+      before.destinations.flatMap((destination) =>
+        destination.candidates.map((entry) => entry.candidate.id),
+      ),
+    );
+    expect(after.pruning?.pruned).toBe(0);
   });
 });
