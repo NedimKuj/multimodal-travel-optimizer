@@ -13,7 +13,7 @@
     "lint": "eslint .",
     "test": "vitest run",
     "build": "pnpm -r --filter '!@travel-optimizer/web' build && pnpm --filter @travel-optimizer/web build",
-    "dev:web": "node --env-file-if-exists=.env pnpm --filter @travel-optimizer/web exec next dev --port 3000",
+    "dev:web": "pnpm --filter @travel-optimizer/web dev",
     "geo:fetch": "pnpm --filter @travel-optimizer/geo build && pnpm --filter @travel-optimizer/geo fetch:reference-data",
     "aviasales:probe": "pnpm --filter @travel-optimizer/providers build && node --env-file-if-exists=.env packages/providers/dist/bin/aviasales-probe.js",
     "test:live": "PROVIDER_LIVE=1 node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run",
