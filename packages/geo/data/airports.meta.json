@@ -1,7 +1,7 @@
 {
   "source": "https://api.travelpayouts.com/data/en-GB/airports.json",
-  "fetchedAt": "2026-09-18T09:46:22.724Z",
+  "fetchedAt": "2026-09-21T14:47:36.007Z",
   "recordCount": 10184,
-  "checksumSha256": "2f274ed2d8793aa774da1c707318a46d26dc98dda3a74979f11dc327614c627b",
+  "checksumSha256": "a0411d1bbba94293a0c51d528834f78463b20ffe0dc1251ce9f551b2b5d11a54",
   "termsStatus": "Redistribution terms unverified as of 2026-09-18; snapshot not committed. See docs/provider-compliance.md."
 }
