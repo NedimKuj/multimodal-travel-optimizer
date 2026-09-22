@@ -576,8 +576,15 @@ export function buildOutboundOriginTransfer(
   return { segments: [out.segment], offers: [out.offer] };
 }
 
-/** Turns one offer into a validated, feasible, in-window, in-budget candidate. */
-function buildCandidate(
+/**
+ * Turns one provider round-trip offer into a validated, feasible, in-window,
+ * in-budget candidate.
+ *
+ * Shared with composed searches, where matched round-trip fares found during
+ * discovery are assembled by exactly these rules rather than being taken apart
+ * into one-way legs and paired again (ADR 0019).
+ */
+export function buildCandidate(
   offer: TransportOffer,
   segmentsById: ReadonlyMap<string, TransportSegment>,
   request: SearchRequest,
