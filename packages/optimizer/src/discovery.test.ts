@@ -75,14 +75,17 @@ const nothing = () => okResult("fixture-flights", { segments: [], offers: [] }, 
 /**
  * A provider that answers each stage by the shape of its query.
  *
- * "Anywhere" from home is stage 1; "anywhere" from a destination is stage 3;
- * anything else is a return query, answered by where it departs from.
+ * "Anywhere" from home carrying a return range is stage 1b, the matched
+ * round-trip question; "anywhere" from home without one is stage 1; "anywhere"
+ * from a destination is stage 3; anything else is a return query, answered by
+ * where it departs from.
  */
 function stagedProvider(
   outbound: ProviderResult<TransportSearchResult>,
   returns: Record<string, ProviderResult<TransportSearchResult>>,
   queries: FlightSearchQuery[] = [],
   onward: Record<string, ProviderResult<TransportSearchResult>> = {},
+  roundTrip: ProviderResult<TransportSearchResult> = nothing(),
 ): FlightProvider {
   return {
     descriptor: {
@@ -96,12 +99,42 @@ function stagedProvider(
       queries.push(query);
       const [from] = query.origins;
       if (query.destinations === "anywhere") {
-        if (from === "SJJ") return Promise.resolve(outbound);
-        return Promise.resolve(onward[from ?? ""] ?? nothing());
+        if (from !== "SJJ") return Promise.resolve(onward[from ?? ""] ?? nothing());
+        return Promise.resolve(query.returnDates === undefined ? outbound : roundTrip);
       }
       return Promise.resolve(returns[from ?? ""] ?? nothing());
     },
   };
+}
+
+/** A matched round trip: one offer over an outbound and its way home. */
+function matched(id: string, to: typeof FCO, amountMinor: number) {
+  const out = segment({
+    id: `${id}-out`,
+    origin: SJJ,
+    destination: to,
+    departure: "2026-12-27T10:00+01:00",
+    arrival: `2026-12-27T13:30${ARRIVAL_OFFSET[to.id] ?? "+01:00"}`,
+  });
+  const back = segment({
+    id: `${id}-back`,
+    origin: to,
+    destination: SJJ,
+    departure: `2027-01-02T18:00${ARRIVAL_OFFSET[to.id] ?? "+01:00"}`,
+    arrival: "2027-01-02T19:30+01:00",
+  });
+  return {
+    segments: [out, back],
+    offers: [offer(`${id}-fare`, [out.id, back.id], amountMinor)],
+  };
+}
+
+/** Origins of the stage-2/3 queries, with stages 1 and 1b left out. */
+function laterOrigins(queries: readonly FlightSearchQuery[]): (string | undefined)[] {
+  return queries
+    .slice(1)
+    .filter((query) => !(query.destinations === "anywhere" && query.returnDates !== undefined))
+    .map((query) => query.origins[0]);
 }
 
 const window = (() => {
@@ -131,8 +164,12 @@ describe("discoverOneWayLegs", () => {
 
     expect(queries[0]).toMatchObject({ destinations: "anywhere", origins: ["SJJ"] });
     expect(queries[0]?.returnDates).toBeUndefined();
-    expect(queries.slice(1).map((query) => query.origins[0])).toEqual(["FCO", "SAW"]);
-    expect(queries[1]).toMatchObject({ destinations: ["SJJ"] });
+    // Stage 1b asks the same broad question of the primary origin, with a
+    // return range — which is what makes it a round-trip query (ADR 0019).
+    expect(queries[1]).toMatchObject({ destinations: "anywhere", origins: ["SJJ"] });
+    expect(queries[1]?.returnDates).toBeDefined();
+    expect(laterOrigins(queries)).toEqual(["FCO", "SAW"]);
+    expect(queries[2]).toMatchObject({ destinations: ["SJJ"] });
     expect(discovery.status).toBe("ok");
   });
 
@@ -151,7 +188,7 @@ describe("discoverOneWayLegs", () => {
       origins,
       cities: cityRepository,
     });
-    expect(queries.slice(1).map((query) => query.origins[0])).toEqual(["CIA", "FCO", "SAW"]);
+    expect(laterOrigins(queries)).toEqual(["CIA", "FCO", "SAW"]);
     expect(discovery.enriched.map((entry) => entry.airport.iata)).toEqual(["CIA", "FCO", "SAW"]);
   });
 
@@ -163,7 +200,7 @@ describe("discoverOneWayLegs", () => {
       queries,
     );
     await discoverOneWayLegs(provider, { window, currency: "EUR", travelers: 2, origins, cities: cityRepository });
-    expect(queries.slice(1).map((query) => query.origins[0])).toEqual(["CIA", "FCO"]);
+    expect(laterOrigins(queries)).toEqual(["CIA", "FCO"]);
   });
 
   it("stops at the call budget and records who was skipped and why", async () => {
@@ -173,17 +210,18 @@ describe("discoverOneWayLegs", () => {
       {},
       queries,
     );
-    // Departures sit in one month (1 call); the return window spans December
-    // and January, so each return query costs 2. Budget 5 funds two of them.
+    // Departures sit in one month (1 call) and stage 1b costs 2; the return
+    // window spans December and January, so each return query costs 2. Budget
+    // 7 funds two of them.
     const discovery = await discoverOneWayLegs(provider, {
       window,
       currency: "EUR",
       travelers: 2,
       origins,
       cities: cityRepository,
-      callBudget: 5,
+      callBudget: 7,
     });
-    expect(discovery.callsPlanned).toBeLessThanOrEqual(5);
+    expect(discovery.callsPlanned).toBeLessThanOrEqual(7);
     expect(discovery.enriched.map((entry) => entry.airport.iata)).toEqual(["CIA", "FCO"]);
     expect(discovery.skipped.map((entry) => entry.airport.iata)).toEqual(["SAW"]);
     expect(discovery.skipped.map((entry) => entry.reason)).toEqual(["call_budget"]);
@@ -296,8 +334,11 @@ describe("discoverOneWayLegs — onward legs (stage 3)", () => {
     });
     expect(discovery.onward).toEqual([]);
     expect(discovery.onwardByAirport.size).toBe(0);
-    // One stage-1 query and one return query: nothing was asked from Rome.
-    expect(queries.filter((query) => query.destinations === "anywhere")).toHaveLength(1);
+    // Stage 1 and stage 1b both ask "anywhere" of home; nothing was asked from
+    // Rome, which is what an onward query would have looked like.
+    const broad = queries.filter((query) => query.destinations === "anywhere");
+    expect(broad).toHaveLength(2);
+    expect(broad.every((query) => query.origins[0] === "SJJ")).toBe(true);
   });
 
   it("asks each destination where it can go on to", async () => {
@@ -354,17 +395,18 @@ describe("discoverOneWayLegs — onward legs (stage 3)", () => {
       [],
       {},
     );
-    // Stage 1 costs 1, each return 2: budget 5 funds both returns and no more.
+    // Stage 1 costs 1, stage 1b 2, each return 2: budget 7 funds both returns
+    // and no more.
     const discovery = await discoverOneWayLegs(provider, {
       window,
       currency: "EUR",
       travelers: 2,
       origins,
       cities: cityRepository,
-      callBudget: 5,
+      callBudget: 7,
       multiCity: true,
     });
-    expect(discovery.callsPlanned).toBeLessThanOrEqual(5);
+    expect(discovery.callsPlanned).toBeLessThanOrEqual(7);
     const onwardSkips = discovery.skipped.filter((entry) => entry.stage === "onward");
     expect(onwardSkips.map((entry) => entry.airport.iata)).toEqual(["CIA", "FCO"]);
     expect(onwardSkips.every((entry) => entry.reason === "call_budget")).toBe(true);
@@ -381,8 +423,12 @@ describe("discoverOneWayLegs — splitting the budget between stages", () => {
   ]);
 
   /** The stage each query belongs to, in the order they were asked. */
+  /** The stage-2 and stage-3 queries, with stages 1 and 1b left out. */
   function stagesOf(queries: readonly FlightSearchQuery[]): string[] {
-    return queries.slice(1).map((query) => (query.destinations === "anywhere" ? "onward" : "return"));
+    return queries
+      .slice(1)
+      .filter((query) => !(query.destinations === "anywhere" && query.returnDates !== undefined))
+      .map((query) => (query.destinations === "anywhere" ? "onward" : "return"));
   }
 
   it("funds the guaranteed ways home before any onward leg", async () => {
@@ -410,9 +456,9 @@ describe("discoverOneWayLegs — splitting the budget between stages", () => {
       callBudget: 12,
       multiCity: true,
     });
-    // Stage 1 costs 1; each query after it costs 2, so 12 funds five in all:
-    // two guaranteed ways home, then return, onward, return.
-    expect(stagesOf(queries)).toEqual(["return", "return", "return", "onward", "return"]);
+    // Stage 1 costs 1 and stage 1b 2; each query after them costs 2, so 12
+    // funds four in all: two guaranteed ways home, then return, onward.
+    expect(stagesOf(queries)).toEqual(["return", "return", "return", "onward"]);
   });
 
   it("asks nothing onward when multi-city was not requested", async () => {
@@ -431,8 +477,9 @@ describe("discoverOneWayLegs — splitting the budget between stages", () => {
   it("spends the floor on ways home even when that leaves nothing onward", async () => {
     const queries: FlightSearchQuery[] = [];
     // Three origins over a two-month departure window cost 6 of 12 before
-    // anything else; two guaranteed ways home at 2 each make 10, and a third
-    // return takes it to 12. Onward discovery never gets a call.
+    // anything else, and stage 1b costs 4 more (two departure months × two
+    // return months) for 10. Only one way home then fits, and onward discovery
+    // never gets a call: the floor binds onward, never the budget.
     const discovery = await discoverOneWayLegs(stagedProvider(four, {}, queries), {
       window: {
         ...window,
@@ -450,7 +497,10 @@ describe("discoverOneWayLegs — splitting the budget between stages", () => {
       multiCity: true,
     });
     expect(discovery.callsPlanned).toBeLessThanOrEqual(12);
-    expect(stagesOf(queries)).toEqual(["return", "return", "return"]);
+    expect(stagesOf(queries)).toEqual(["return"]);
+    // What matters is that no onward query ran before a way home, and that the
+    // ones that could not run are recorded rather than dropped.
+    expect(stagesOf(queries).includes("onward")).toBe(false);
     expect(discovery.skipped.filter((entry) => entry.stage === "onward").length).toBeGreaterThan(0);
   });
 
@@ -476,7 +526,8 @@ describe("discoverOneWayLegs — splitting the budget between stages", () => {
         travelers: 2,
         origins,
         cities: cityRepository,
-        callBudget: 3,
+        // Stage 1 costs 1 and stage 1b 2, so 5 leaves exactly one way home.
+        callBudget: 5,
         multiCity: true,
       },
     );
@@ -566,7 +617,8 @@ describe("discoverOneWayLegs — mixed return candidates", () => {
         travelers: 2,
         origins,
         cities: cityRepository,
-        callBudget: 12,
+        // Stage 1b costs 2, so 14 leaves the allocator the same room as 12 did.
+        callBudget: 14,
         multiCity: true,
       },
     );
@@ -652,7 +704,8 @@ describe("discoverOneWayLegs — mixed return candidates", () => {
         travelers: 2,
         origins,
         cities: cityRepository,
-        callBudget: 12,
+        // Stage 1b costs 2, so 14 leaves the allocator the same room as 12 did.
+        callBudget: 14,
         multiCity: true,
       },
     );
@@ -679,12 +732,14 @@ describe("discoverOneWayLegs — mixed return candidates", () => {
         travelers: 2,
         origins,
         cities: cityRepository,
-        callBudget: 12,
+        // Stage 1b costs 2, so 14 leaves the allocator the same room as 12 did.
+        callBudget: 14,
         multiCity: true,
       },
     );
     const stages = queries
       .slice(1)
+      .filter((query) => !(query.destinations === "anywhere" && query.returnDates !== undefined))
       .map((query) => (query.destinations === "anywhere" ? "onward" : "return"));
     expect(stages.slice(0, 2)).toEqual(["return", "return"]);
   });
@@ -703,13 +758,13 @@ describe("discoverOneWayLegs — mixed return candidates", () => {
         travelers: 2,
         origins,
         cities: cityRepository,
-        // Stage 1 costs 1, Rome's way home 2, Rome's onward 2: 5 of 5 spent,
-        // so Milan is discovered and then cannot be asked about.
-        callBudget: 5,
+        // Stage 1 costs 1, stage 1b 2, Rome's way home 2, Rome's onward 2:
+        // 7 of 7 spent, so Milan is discovered and then cannot be asked about.
+        callBudget: 7,
         multiCity: true,
       },
     );
-    expect(discovery.callsPlanned).toBeLessThanOrEqual(5);
+    expect(discovery.callsPlanned).toBeLessThanOrEqual(7);
     const milan = discovery.skipped.find((entry) => entry.airport.iata === "MXP");
     expect(milan).toMatchObject({ stage: "return", reason: "call_budget", source: "onward" });
     expect(milan?.via.map((stop) => stop.iata)).toEqual(["CIA", "MXP"]);

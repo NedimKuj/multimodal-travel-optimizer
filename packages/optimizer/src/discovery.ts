@@ -99,6 +99,14 @@ export interface DiscoveryFunnel {
   /** Of those, the ones that came back with at least one fare. */
   readonly returnFaresFoundFromStageOne: number;
   readonly returnFaresFoundFromSecondCity: number;
+  /** Provider calls stage 1b spent on matched round-trip fares (ADR 0019). */
+  readonly matchedRoundTripCalls: number;
+  /** Matched round-trip offers it found, each already carrying its way home. */
+  readonly matchedRoundTripOffers: number;
+  /** Destinations reached by a matched round trip, so needing no way-home query. */
+  readonly matchedRoundTripDestinations: number;
+  /** Stage-1 destinations a matched round trip spared a return query. */
+  readonly returnQueriesSavedByMatch: number;
 }
 
 const EMPTY_FUNNEL: DiscoveryFunnel = {
@@ -111,11 +119,27 @@ const EMPTY_FUNNEL: DiscoveryFunnel = {
   returnQueriesFromSecondCity: 0,
   returnFaresFoundFromStageOne: 0,
   returnFaresFoundFromSecondCity: 0,
+  matchedRoundTripCalls: 0,
+  matchedRoundTripOffers: 0,
+  matchedRoundTripDestinations: 0,
+  returnQueriesSavedByMatch: 0,
 };
 
 export interface DiscoveryResult {
   readonly outboundSegments: readonly TransportSegment[];
   readonly outboundOffers: readonly TransportOffer[];
+  /**
+   * Matched round-trip fares from the primary origin (stage 1b, ADR 0019).
+   *
+   * Each offer already spans its outbound and its way home, so these go
+   * straight to candidate construction. Taking them apart into one-way legs
+   * and pairing them again would discard the commercial fact that the provider
+   * sells the two together at that price.
+   */
+  readonly matchedSegments: readonly TransportSegment[];
+  readonly matchedOffers: readonly TransportOffer[];
+  /** Destination airports a matched round trip already gets home from. */
+  readonly matchedReturnAirports: ReadonlySet<string>;
   /** Return legs keyed by the destination airport they depart from. */
   readonly returnsByAirport: ReadonlyMap<
     string,
@@ -233,6 +257,9 @@ export async function discoverOneWayLegs(
     return {
       outboundSegments: [],
       outboundOffers: [],
+      matchedSegments: [],
+      matchedOffers: [],
+      matchedReturnAirports: new Set(),
       returnsByAirport: new Map(),
       onwardByAirport: new Map(),
       enriched: [],
@@ -281,6 +308,67 @@ export async function discoverOneWayLegs(
     const lookup = lookupCityForAirport(options.cities, airport);
     return lookup.ok ? lookup.city : undefined;
   };
+
+  /*
+   * Stage 1b: matched round-trip fares from the primary origin (ADR 0019).
+   *
+   * The provider holds two partly separate universes. The one-way cache answers
+   * "where can I go?" broadly; the round-trip cache answers "where can I go and
+   * come back?" for fewer places, but answers both halves at once. Measured
+   * 2026-09-21: the one-way universe reached 17 in-window destinations and one
+   * of them had a retrievable way home, while two round-trip calls reached nine
+   * destinations that all did.
+   *
+   * It runs whatever `allowOpenJaw` says. Permitting an open jaw widens what a
+   * trip may look like; it never means only open jaws are wanted, and a matched
+   * round trip is the one shape that arrives with no unpriced sector at all.
+   */
+  const matchedSegments: TransportSegment[] = [];
+  const matchedOffers: TransportOffer[] = [];
+  const matchedReturnAirports = new Set<string>();
+  let matchedRoundTripCalls = 0;
+
+  if (returnWindow !== undefined) {
+    // The provider queries month by month and pairs each departure month with
+    // each return month, so the cost is the product, not either alone. An upper
+    // bound: pairs whose return precedes departure are never planned.
+    const matchedCallCost = costOfQuery(options.window.departure) * costOfQuery(returnWindow);
+    if (canAfford(budget, matchedCallCost)) {
+      spend(budget, matchedCallCost);
+      matchedRoundTripCalls = matchedCallCost;
+      const matched = await provider.search(
+        {
+          origins: [homeCode],
+          destinations: "anywhere",
+          departureDates: options.window.departure,
+          // Supplying a return range is what makes this a round-trip query, and
+          // the adapter leaves `unique` off for one, which is what keeps several
+          // date pairs per destination — the breadth a nights range needs.
+          returnDates: returnWindow,
+          travelers: options.travelers,
+          currency: options.currency,
+        },
+        options.signal === undefined ? undefined : { signal: options.signal },
+      );
+      metrics.push(matched.metrics);
+      failures.push(...matched.failures);
+
+      if (matched.status !== "failed") {
+        matchedSegments.push(...matched.data.segments);
+        matchedOffers.push(...matched.data.offers);
+        const byId = new Map(matched.data.segments.map((segment) => [segment.id, segment]));
+        for (const offer of matched.data.offers) {
+          // Only a fare that actually carries a way home covers a destination.
+          // A one-way fare in this response would not, so it is not counted.
+          if (offer.segmentIds.length !== 2) continue;
+          const [out, back] = offer.segmentIds.map((id) => byId.get(id));
+          if (out === undefined || back === undefined) continue;
+          if (back.destination.id !== out.origin.id) continue;
+          matchedReturnAirports.add(out.destination.id);
+        }
+      }
+    }
+  }
 
   /** A stage-1 destination, as a candidate for a way home. */
   const directCandidate = (candidate: Candidate): ReturnCandidate => ({
@@ -404,9 +492,24 @@ export async function discoverOneWayLegs(
   // Only where the return candidates come from has changed: a growing pool fed
   // by both stages, rather than stage 1 alone (ADR 0015 §7).
   const stageOne = shortlist.map(directCandidate);
+  let returnQueriesSavedByMatch = 0;
   // Nothing enters the pool for a one-way: there is no way home to look for.
   if (returnWindow !== undefined) {
-    for (const candidate of stageOne) pool.offer(candidate);
+    for (const candidate of stageOne) {
+      // Stage 1b already bought the way home from here, so asking again would
+      // spend a call on a question that has an answer (ADR 0019).
+      //
+      // Only the direct trip is covered. A second city an onward leg reaches
+      // still earns its own query even when a matched round trip flies there,
+      // because the return half of that fare is priced as part of the pair and
+      // cannot be spent on a different itinerary.
+      if (matchedReturnAirports.has(candidate.airport.id)) {
+        skip(candidate, "return", "matched_round_trip");
+        returnQueriesSavedByMatch += 1;
+        continue;
+      }
+      pool.offer(candidate);
+    }
   }
   // Onward discovery starts only from stage-1 destinations, which fixes the
   // depth of a trip at SJJ -> A -> B -> SJJ rather than opening a traversal.
@@ -489,11 +592,18 @@ export async function discoverOneWayLegs(
     returnFaresFoundFromSecondCity: queriedFrom("onward").filter(
       (entry) => entry.returnOffersFound > 0,
     ).length,
+    matchedRoundTripCalls,
+    matchedRoundTripOffers: matchedOffers.length,
+    matchedRoundTripDestinations: matchedReturnAirports.size,
+    returnQueriesSavedByMatch,
   };
 
   return {
     outboundSegments: outbound.data.segments,
     outboundOffers: outbound.data.offers,
+    matchedSegments,
+    matchedOffers,
+    matchedReturnAirports,
     returnsByAirport,
     onwardByAirport,
     enriched,
