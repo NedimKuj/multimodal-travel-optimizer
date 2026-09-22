@@ -3,6 +3,7 @@ import { lookupCityForAirport, type SearchRequest } from "@travel-optimizer/doma
 import type { DiscoveryResult } from "./discovery.js";
 import {
   assembleCandidate,
+  buildCandidate,
   type CandidateAttempt,
   type CandidateContext,
   type ExplorationCounts,
@@ -148,6 +149,17 @@ export function composeItineraries(input: ComposeInput): CompositionResult {
     counts[outcome.counter] = (counts[outcome.counter] ?? 0) + 1;
     if (outcome.issue !== undefined) issues.push(outcome.issue);
   };
+
+  // Matched round-trip fares (stage 1b) are already whole trips: the provider
+  // sells the outbound and the way home together at one price. They are judged
+  // by the same rules as any other candidate, but they are never taken apart
+  // into legs and paired again — doing so would replace a real commercial offer
+  // with a pair we invented, and would need a per-leg price nobody quoted
+  // (ADR 0019).
+  const matchedById = new Map(discovery.matchedSegments.map((segment) => [segment.id, segment]));
+  for (const offer of discovery.matchedOffers) {
+    record(buildCandidate(offer, matchedById, input.request, input.window, input.context), 2);
+  }
 
   // A one-way trip is its outbound and nothing else: there is no way home to
   // pair it with, so each fare is already a whole itinerary (ADR 0018).

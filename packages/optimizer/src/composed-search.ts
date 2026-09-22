@@ -199,16 +199,19 @@ export async function exploreComposedItineraries(
 
   const counts = mergeCounts(emptyCounts, {
     ...composed.counts,
-    offersReturned: discovery.outboundOffers.length,
+    // Both universes were asked, so both are counted (ADR 0019).
+    offersReturned: discovery.outboundOffers.length + discovery.matchedOffers.length,
     candidatesBuilt: composed.attempts.length,
     destinations: destinations.length,
     destinationsWithoutReturn: discovery.enriched.filter((entry) => entry.returnOffersFound === 0)
       .length,
   });
 
-  // Budget-limited or partially failed searches say so rather than looking thorough.
-  const status =
-    discovery.failures.length > 0 || discovery.skipped.length > 0 ? "partial" : "ok";
+  // Budget-limited or partially failed searches say so rather than looking
+  // thorough. A query stage 1b made unnecessary is not a shortfall: the
+  // question was answered, so it does not make the search partial (ADR 0019).
+  const shortfalls = discovery.skipped.filter((entry) => entry.reason !== "matched_round_trip");
+  const status = discovery.failures.length > 0 || shortfalls.length > 0 ? "partial" : "ok";
 
   return {
     status,
