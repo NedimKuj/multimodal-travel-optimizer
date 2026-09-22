@@ -262,6 +262,36 @@ describe("mapPriceRecords", () => {
     expect(result.offers).toHaveLength(2);
   });
 
+  it("shares one segment between a one-way fare and a round trip over it", () => {
+    // Measured 2026-09-21: the same physical flight is sold both ways, and the
+    // two universes are queried separately. The flight must normalize to one
+    // segment, while the two commercial offers over it stay distinct.
+    const sameFlightBothWays = {
+      ...ONE_WAY_RECORD,
+      return_at: "2027-01-02T18:00:00+01:00",
+      duration_back: 90,
+      price: 44,
+      link: "/search/SJJ2612ROM0201?t=x",
+    };
+    const result = mapPriceRecords([ONE_WAY_RECORD, sameFlightBothWays], options());
+
+    const outbound = result.segments.filter(
+      (segment) => segment.origin.iata === "SJJ" && segment.destination.iata === "FCO",
+    );
+    expect(outbound).toHaveLength(1);
+    expect(result.offers).toHaveLength(2);
+    expect(new Set(result.offers.map((offer) => offer.id)).size).toBe(2);
+    const [oneWayOffer, roundTripOffer] = [...result.offers].sort(
+      (left, right) => left.segmentIds.length - right.segmentIds.length,
+    );
+    expect(oneWayOffer?.segmentIds).toHaveLength(1);
+    expect(roundTripOffer?.segmentIds).toHaveLength(2);
+    // Both price the same outbound, and neither loses its own provenance.
+    expect(roundTripOffer?.segmentIds).toContain(outbound[0]?.id);
+    expect(oneWayOffer?.provenance.sourceType).toBe("cached");
+    expect(roundTripOffer?.provenance.sourceType).toBe("cached");
+  });
+
   it("collapses byte-identical duplicate records", () => {
     const result = mapPriceRecords([ONE_WAY_RECORD, { ...ONE_WAY_RECORD }], options());
     expect(result.offers).toHaveLength(1);
