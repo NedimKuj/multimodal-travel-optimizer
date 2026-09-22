@@ -50,12 +50,35 @@ function returnLeg(id: string, from: typeof FCO, amountMinor: number) {
   return { segments: [leg], offers: [offer(`${id}-fare`, [leg.id], amountMinor)] };
 }
 
+/** A matched round trip: one offer spanning an outbound and its way home. */
+function matchedTrip(id: string, to: typeof FCO, amountMinor: number) {
+  const out = segment({
+    id: `${id}-out`,
+    origin: SJJ,
+    destination: to,
+    departure: "2026-12-27T10:00+01:00",
+    arrival: `2026-12-27T13:30${ARRIVAL_OFFSET[to.id] ?? "+01:00"}`,
+  });
+  const back = segment({
+    id: `${id}-back`,
+    origin: to,
+    destination: SJJ,
+    departure: `2027-01-02T18:00${ARRIVAL_OFFSET[to.id] ?? "+01:00"}`,
+    arrival: "2027-01-02T20:30+01:00",
+  });
+  return {
+    segments: [out, back],
+    offers: [offer(`${id}-fare`, [out.id, back.id], amountMinor)],
+  };
+}
+
 type Legs = ReturnType<typeof outboundLeg>;
 
 function provider(
   outbound: Legs[],
   returns: Record<string, Legs[]>,
   onward: Record<string, Legs[]> = {},
+  roundTrip: Legs[] = [],
 ): FlightProvider {
   const pack = (parts: Legs[]) =>
     okResult(
@@ -74,8 +97,10 @@ function provider(
     search: (query: FlightSearchQuery) => {
       const [from] = query.origins;
       if (query.destinations === "anywhere") {
-        // From home this is stage 1; from a destination it is stage 3.
-        return Promise.resolve(pack(from === "SJJ" ? outbound : (onward[from ?? ""] ?? [])));
+        // From home without a return range this is stage 1, and with one it is
+        // stage 1b; from a destination it is stage 3.
+        if (from !== "SJJ") return Promise.resolve(pack(onward[from ?? ""] ?? []));
+        return Promise.resolve(pack(query.returnDates === undefined ? outbound : roundTrip));
       }
       return Promise.resolve(pack(returns[from ?? ""] ?? []));
     },
@@ -596,5 +621,80 @@ describe("multi-city (patterns 3 and 4)", () => {
     );
     expect(result.counts.secondCitiesReached).toBe(1);
     expect(result.counts.secondCitiesWithoutReturn).toBe(1);
+  });
+});
+
+/*
+ * Matched round-trip discovery (stage 1b, ADR 0019).
+ *
+ * Fares here are synthetic. The captured Aviasales responses that motivated
+ * this stage are raw provider data and stay out of version control
+ * (docs/provider-compliance.md), so these fixtures reproduce their *shape*: a
+ * one-way universe whose destinations have no retrievable way home, and a
+ * round-trip universe that answers both halves at once.
+ */
+describe("matched round-trip discovery (stage 1b)", () => {
+  it("builds a candidate straight from a matched fare, as one offer", async () => {
+    const result = await exploreComposedItineraries(
+      request(),
+      deps(provider([], {}, {}, [matchedTrip("rt-cia", CIA, 9000)])),
+      options,
+    );
+    const candidate = result.destinations[0]?.candidates[0];
+    expect(candidate).toBeDefined();
+    // One commercial offer over two segments — not two fares we paired.
+    expect(candidate?.candidate.offers).toHaveLength(1);
+    expect(candidate?.candidate.offers[0]?.segmentIds).toHaveLength(2);
+    expect(candidate?.summary.cost.fares).toEqual({ amountMinor: 18000, currency: "EUR" });
+    // A matched round trip leaves no sector for the traveler to arrange.
+    expect(candidate?.summary.unpricedGaps).toEqual([]);
+  });
+
+  it("finds trips where one-way discovery alone finds none", async () => {
+    // The measured failure: every one-way destination lacked a way home, so
+    // composition had nothing to pair and returned no candidate at all.
+    const oneWayOnly = await exploreComposedItineraries(
+      request(),
+      deps(provider([outboundLeg("out-cia", CIA, 4000)], {})),
+      options,
+    );
+    expect(oneWayOnly.destinations).toEqual([]);
+    expect(oneWayOnly.counts.candidatesBuilt).toBe(0);
+
+    const hybrid = await exploreComposedItineraries(
+      request(),
+      deps(
+        provider([outboundLeg("out-cia", CIA, 4000)], {}, {}, [matchedTrip("rt-cia", CIA, 9000)]),
+      ),
+      options,
+    );
+    expect(hybrid.counts.candidatesBuilt).toBeGreaterThan(0);
+    expect(hybrid.destinations.length).toBeGreaterThan(0);
+  });
+
+  it("runs whether or not an open jaw is allowed", async () => {
+    // Allowing an open jaw widens what a trip may look like. It never means
+    // only open jaws are wanted, so the matched round trip is still offered.
+    for (const allowOpenJaw of [false, true]) {
+      const result = await exploreComposedItineraries(
+        request({ allowOpenJaw }),
+        deps(provider([], {}, {}, [matchedTrip("rt-cia", CIA, 9000)])),
+        options,
+      );
+      expect(result.destinations[0]?.candidates[0]?.candidate.offers).toHaveLength(1);
+    }
+  });
+
+  it("keeps a matched fare whole rather than pricing its legs apart", async () => {
+    const result = await exploreComposedItineraries(
+      request(),
+      deps(provider([], {}, {}, [matchedTrip("rt-cia", CIA, 9000)])),
+      options,
+    );
+    const candidate = result.destinations[0]?.candidates[0];
+    // Two priced segments, one price. No per-leg allocation was invented.
+    expect(candidate?.candidate.segments.length).toBeGreaterThanOrEqual(2);
+    expect(candidate?.candidate.offers).toHaveLength(1);
+    expect(candidate?.summary.cost.estimated).toEqual({ amountMinor: 0, currency: "EUR" });
   });
 });

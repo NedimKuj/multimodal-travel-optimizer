@@ -137,6 +137,13 @@ function laterOrigins(queries: readonly FlightSearchQuery[]): (string | undefine
     .map((query) => query.origins[0]);
 }
 
+/** Origins of the directed way-home queries only. */
+function returnOriginsOf(queries: readonly FlightSearchQuery[]): (string | undefined)[] {
+  return queries
+    .filter((query) => query.destinations !== "anywhere")
+    .map((query) => query.origins[0]);
+}
+
 const window = (() => {
   const resolved = resolveTravelWindow(request());
   if (!resolved.ok) throw new Error("expected a window");
@@ -1067,5 +1074,108 @@ describe("discoverOneWayLegs — funnel accounting", () => {
       onwardQueriesExecuted: 0,
       returnQueriesFromStageOne: 0,
     });
+  });
+});
+
+describe("discoverOneWayLegs — matched round trips (stage 1b)", () => {
+  it("does not ask for a way home from a destination a matched fare covers", async () => {
+    const queries: FlightSearchQuery[] = [];
+    const discovery = await discoverOneWayLegs(
+      stagedProvider(
+        result([oneWay("to-cia", CIA, 2000), oneWay("to-fco", FCO, 2600)]),
+        {},
+        queries,
+        {},
+        result([matched("rt-cia", CIA, 9000)]),
+      ),
+      { window, currency: "EUR", travelers: 2, origins, cities: cityRepository },
+    );
+
+    expect(discovery.matchedReturnAirports.has(CIA.id)).toBe(true);
+    // Rome still needs asking; Ciampino does not, because the question has an
+    // answer already (ADR 0019).
+    expect(returnOriginsOf(queries)).toEqual(["FCO"]);
+    const skipped = discovery.skipped.find((entry) => entry.airport.iata === "CIA");
+    expect(skipped).toMatchObject({ stage: "return", reason: "matched_round_trip" });
+    expect(discovery.funnel.returnQueriesSavedByMatch).toBe(1);
+  });
+
+  it("still asks for a way home from a destination no matched fare covers", async () => {
+    const queries: FlightSearchQuery[] = [];
+    const discovery = await discoverOneWayLegs(
+      stagedProvider(
+        result([oneWay("to-cia", CIA, 2000), oneWay("to-fco", FCO, 2600)]),
+        { FCO: result([homeward("fco-home", FCO, 3200)]) },
+        queries,
+        {},
+        result([matched("rt-cia", CIA, 9000)]),
+      ),
+      { window, currency: "EUR", travelers: 2, origins, cities: cityRepository },
+    );
+    expect(returnOriginsOf(queries)).toEqual(["FCO"]);
+    expect(discovery.returnsByAirport.get(FCO.id)?.offers).toHaveLength(1);
+  });
+
+  it("carries the matched fares through as offers over two segments", async () => {
+    const discovery = await discoverOneWayLegs(
+      stagedProvider(result([]), {}, [], {}, result([matched("rt-cia", CIA, 9000)])),
+      { window, currency: "EUR", travelers: 2, origins, cities: cityRepository },
+    );
+    expect(discovery.matchedOffers).toHaveLength(1);
+    expect(discovery.matchedOffers[0]?.segmentIds).toHaveLength(2);
+    expect(discovery.matchedSegments).toHaveLength(2);
+    expect(discovery.funnel.matchedRoundTripOffers).toBe(1);
+    expect(discovery.funnel.matchedRoundTripDestinations).toBe(1);
+  });
+
+  it("charges a return window spanning two months two calls, not one", async () => {
+    // The fixture window departs inside December and returns across December
+    // and January, so the round-trip question costs one call per month pair.
+    const discovery = await discoverOneWayLegs(
+      stagedProvider(result([]), {}, [], {}, nothing()),
+      { window, currency: "EUR", travelers: 2, origins, cities: cityRepository },
+    );
+    expect(discovery.funnel.matchedRoundTripCalls).toBe(2);
+  });
+
+  it("asks nothing round-trip for a one-way trip, which has no way home", async () => {
+    const oneWayWindow = resolveTravelWindow(
+      request({
+        returnDate: undefined,
+        endDate: "2027-01-03",
+        minNights: undefined,
+        maxNights: undefined,
+      }),
+    );
+    if (!oneWayWindow.ok) throw new Error("expected a window");
+    const queries: FlightSearchQuery[] = [];
+    const discovery = await discoverOneWayLegs(
+      stagedProvider(result([oneWay("to-cia", CIA, 2000)]), {}, queries),
+      { window: oneWayWindow.window, currency: "EUR", travelers: 2, origins, cities: cityRepository },
+    );
+    expect(discovery.funnel.matchedRoundTripCalls).toBe(0);
+    expect(queries.every((query) => query.returnDates === undefined)).toBe(true);
+  });
+
+  it("stays inside the global call budget with every stage turned on", async () => {
+    const discovery = await discoverOneWayLegs(
+      stagedProvider(
+        result([oneWay("to-cia", CIA, 2000), oneWay("to-fco", FCO, 2600), oneWay("to-saw", SAW, 9000)]),
+        {},
+        [],
+        {},
+        result([matched("rt-cia", CIA, 9000)]),
+      ),
+      {
+        window,
+        currency: "EUR",
+        travelers: 2,
+        cities: cityRepository,
+        origins: [...origins, { airport: TZL, distanceKm: 71, isPrimary: false }],
+        callBudget: 12,
+        multiCity: true,
+      },
+    );
+    expect(discovery.callsPlanned).toBeLessThanOrEqual(12);
   });
 });
