@@ -39,9 +39,11 @@ export type SearchStageName =
  * Why a query the search would have made never ran.
  *
  * `call_budget` means there was nothing left to spend; `cap` means a limit of
- * our own stopped it before the budget did.
+ * our own stopped it before the budget did; `matched_round_trip` means the
+ * question was already answered, because the provider's own round-trip fare
+ * carries the way home (ADR 0019) — a saving, not a shortfall.
  */
-export type SkipReason = "call_budget" | "cap";
+export type SkipReason = "call_budget" | "cap" | "matched_round_trip";
 
 /**
  * What every skipped query shares, whatever it was about.
