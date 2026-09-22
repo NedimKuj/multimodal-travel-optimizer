@@ -1100,11 +1100,18 @@ describe("discoverOneWayLegs — matched round trips (stage 1b)", () => {
     expect(discovery.funnel.returnQueriesSavedByMatch).toBe(1);
   });
 
-  it("still asks for a way home from a destination no matched fare covers", async () => {
+  it("still asks for a way home from every destination no matched fare covers", async () => {
     const queries: FlightSearchQuery[] = [];
     const discovery = await discoverOneWayLegs(
       stagedProvider(
-        result([oneWay("to-cia", CIA, 2000), oneWay("to-fco", FCO, 2600)]),
+        // Three destinations, one of which a matched fare covers. The other
+        // two must still be asked about: coverage is per destination, never a
+        // reason to stop asking generally.
+        result([
+          oneWay("to-cia", CIA, 2000),
+          oneWay("to-fco", FCO, 2600),
+          oneWay("to-saw", SAW, 2900),
+        ]),
         { FCO: result([homeward("fco-home", FCO, 3200)]) },
         queries,
         {},
@@ -1112,8 +1119,13 @@ describe("discoverOneWayLegs — matched round trips (stage 1b)", () => {
       ),
       { window, currency: "EUR", travelers: 2, origins, cities: cityRepository },
     );
-    expect(returnOriginsOf(queries)).toEqual(["FCO"]);
+
+    expect(returnOriginsOf(queries)).toEqual(["FCO", "SAW"]);
+    expect(discovery.enriched.map((entry) => entry.airport.iata)).toEqual(["FCO", "SAW"]);
     expect(discovery.returnsByAirport.get(FCO.id)?.offers).toHaveLength(1);
+    // Exactly one destination was spared, and it is the covered one.
+    const spared = discovery.skipped.filter((entry) => entry.reason === "matched_round_trip");
+    expect(spared.map((entry) => entry.airport.iata)).toEqual(["CIA"]);
   });
 
   it("carries the matched fares through as offers over two segments", async () => {

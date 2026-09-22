@@ -333,6 +333,13 @@ export async function discoverOneWayLegs(
     // each return month, so the cost is the product, not either alone. An upper
     // bound: pairs whose return precedes departure are never planned.
     const matchedCallCost = costOfQuery(options.window.departure) * costOfQuery(returnWindow);
+    // Stage 1b is funded before the guaranteed return floor, deliberately.
+    // Both exist to answer the same question — how does the traveler get home?
+    // — and this one answers it for more places per call: measured 2026-09-21,
+    // two calls here returned matched ways home from nine destinations, while
+    // the floor's four calls returned fares from none. Where the budget cannot
+    // cover both, buying the better answer first is the point of the floor,
+    // not a breach of it.
     if (canAfford(budget, matchedCallCost)) {
       spend(budget, matchedCallCost);
       matchedRoundTripCalls = matchedCallCost;
